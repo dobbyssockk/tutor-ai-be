@@ -20,7 +20,7 @@ const createJWT = (id: string) => {
   if (!JWT_SECRET) {
     throw new Error("JWT_SECRET is not set in .env");
   }
-  return jwt.sign({ sub: id }, JWT_SECRET, { expiresIn: "1h" });
+  return jwt.sign({ sub: id }, JWT_SECRET, { expiresIn: "30d" });
 };
 
 app.post("/auth/sign-up", async (req, res) => {

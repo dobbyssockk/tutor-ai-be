@@ -13,12 +13,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  user
+  assistant
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   email     String   @unique
   password  String
   username  String
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
+  chats     Chat[]
 
   @@map("users")
+}
+
+model Chat {
+  id        String    @id @default(uuid()) @db.Uuid
+  title     String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String    @map("user_id") @db.Uuid
+  messages  Message[]
+
+  @@map("chats")
+}
+
+model Message {
+  id         String   @id @default(uuid()) @db.Uuid
+  role       Role
+  outputText String   @map("output_text")
+  createdAt  DateTime @default(now()) @map("created_at")
+  chat       Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId     String   @map("chat_id") @db.Uuid
+
+  @@map("messages")
 }
