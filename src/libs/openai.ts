@@ -9,16 +9,38 @@ type Message = {
   outputText: string;
 };
 
-export const generateGPT = async (context: Message[]) => {
+export const generateGPT = async (
+  context: Message[],
+  tutorInstructions?: string | null,
+  userName?: string | null
+) => {
   try {
+    const systemMessages = [
+      {
+        role: "system" as const,
+        content: INSTRUCTIONS,
+      },
+    ];
+
+    if (tutorInstructions?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: `User preferences:\n${tutorInstructions.trim()}`,
+      });
+    }
+
+    if (userName?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: `User's name: ${userName.trim()}. Use this name when appropriate.`,
+      });
+    }
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        {
-          role: "system",
-          content: INSTRUCTIONS,
-        },
-        ...context.map((m) => ({
+        ...systemMessages,
+        ...context.map(m => ({
           role: m.role,
           content: m.outputText,
         })),

@@ -20,7 +20,7 @@ Built with Express, it uses Prisma for database management and JWT for secure au
 ## 🚀 Features
 
 - REST API built with Express
-- JWT-based authentication with signup/login
+- JWT-based authentication with signup/signin
 - OpenAI response generation via structured prompts
 - PostgreSQL integration with Prisma
 - Password hashing with bcrypt
@@ -33,7 +33,7 @@ Built with Express, it uses Prisma for database management and JWT for secure au
 `POST /auth/sign-up`  
 Creates a new user account with email, username, and hashed password.
 
-`POST /auth/login`  
+`POST /auth/sign-in`  
 Authenticates a user and returns a JWT token with user info.
 
 `GET /auth/me`  

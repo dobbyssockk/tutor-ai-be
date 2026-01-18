@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import express from "express";
 import { expressjwt, Request as JWTRequest } from "express-jwt";
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+import { GoalStatus, PrismaClient } from "@prisma/client";
 import { generateGPT } from "./libs/openai";
 
 dotenv.config(); // load environment variables from a .env file into
@@ -29,9 +29,13 @@ const createJWT = (id: string) => {
 
 app.post("/auth/sign-up", async (req, res) => {
   try {
-    const { email, password, username } = req.body;
+    const { email, password, displayName } = req.body;
+    const normalizedEmail = (email || "").trim().toLowerCase();
+    const username = normalizedEmail.split("@")[0] || normalizedEmail;
+    const trimmedDisplayName =
+      typeof displayName === "string" ? displayName.trim() : "";
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    const existingUser = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existingUser) {
       res.status(400).json({ message: "This email is already registered" });
       return;
@@ -40,8 +44,9 @@ app.post("/auth/sign-up", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     const newUser = await prisma.user.create({
       data: {
-        email,
+        email: normalizedEmail,
         username,
+        displayName: trimmedDisplayName || null,
         password: hashedPassword,
       },
     });
@@ -54,6 +59,8 @@ app.post("/auth/sign-up", async (req, res) => {
         id: newUser.id,
         email: newUser.email,
         username: newUser.username,
+        displayName: newUser.displayName,
+        tutorInstructions: newUser.tutorInstructions,
         createdAt: newUser.createdAt,
       },
     });
@@ -63,11 +70,12 @@ app.post("/auth/sign-up", async (req, res) => {
   }
 });
 
-app.post("/auth/login", async (req, res) => {
+app.post("/auth/sign-in", async (req, res) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = (email || "").trim().toLowerCase();
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       res.status(401).json({ message: "Invalid email or password" });
       return;
@@ -81,6 +89,8 @@ app.post("/auth/login", async (req, res) => {
         id: user.id,
         email: user.email,
         username: user.username,
+        displayName: user.displayName,
+        tutorInstructions: user.tutorInstructions,
         createdAt: user.createdAt,
       },
     });
@@ -99,9 +109,84 @@ app.get("/auth/me", requireAuth, async (req: JWTRequest, res) => {
         id: user.id,
         email: user.email,
         username: user.username,
+        displayName: user.displayName,
+        tutorInstructions: user.tutorInstructions,
         createdAt: user.createdAt,
       },
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.patch("/auth/me", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const id = req.auth!.sub!;
+    const { tutorInstructions, displayName } = req.body as {
+      tutorInstructions?: string | null;
+      displayName?: string | null;
+    };
+
+    const updateData: {
+      tutorInstructions?: string | null;
+      displayName?: string | null;
+    } = {};
+
+    if (tutorInstructions !== undefined) {
+      const trimmed = tutorInstructions?.trim();
+      updateData.tutorInstructions = trimmed ? trimmed : null;
+    }
+
+    if (displayName !== undefined) {
+      const trimmed = displayName?.trim();
+      updateData.displayName = trimmed ? trimmed : null;
+    }
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: updateData,
+    });
+
+    res.status(200).json({
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        displayName: user.displayName,
+        tutorInstructions: user.tutorInstructions,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/auth/me", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+
+    await prisma.$transaction(async (tx) => {
+      const chats = await tx.chat.findMany({
+        where: { userId },
+        select: { id: true },
+      });
+      const chatIds = chats.map((chat) => chat.id);
+
+      if (chatIds.length > 0) {
+        await tx.message.deleteMany({
+          where: { chatId: { in: chatIds } },
+        });
+      }
+
+      await tx.chat.deleteMany({ where: { userId } });
+      await tx.goal.deleteMany({ where: { userId } });
+      await tx.user.delete({ where: { id: userId } });
+    });
+
+    res.sendStatus(204);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -122,21 +207,150 @@ app.get("/chats", requireAuth, async (req: JWTRequest, res) => {
   }
 });
 
+app.get("/goals", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const goals = await prisma.goal.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.status(200).json({ goals });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/goals", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const { title, notes } = req.body as { title?: string; notes?: string };
+
+    const trimmedTitle = (title || "").trim();
+    const trimmedNotes = notes?.trim();
+
+    if (!trimmedTitle) {
+      res.status(400).json({ error: "Title is required" });
+      return;
+    }
+
+    const goal = await prisma.goal.create({
+      data: {
+        title: trimmedTitle,
+        notes: trimmedNotes || null,
+        status: GoalStatus.todo,
+        userId,
+      },
+    });
+
+    res.status(201).json({ goal });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.patch("/goals/:goalId", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const { goalId } = req.params;
+    const { title, notes, status } = req.body as {
+      title?: string;
+      notes?: string;
+      status?: GoalStatus;
+    };
+
+    const existing = await prisma.goal.findFirst({
+      where: { id: goalId, userId },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    const updates: Record<string, unknown> = {};
+
+    if (title !== undefined) {
+      const trimmed = title.trim();
+      if (!trimmed) {
+        res.status(400).json({ error: "Title cannot be empty" });
+        return;
+      }
+      updates.title = trimmed;
+    }
+
+    if (notes !== undefined) {
+      const trimmedNotes = notes.trim();
+      updates.notes = trimmedNotes ? trimmedNotes : null;
+    }
+
+    if (status !== undefined) {
+      if (![GoalStatus.todo, GoalStatus.done].includes(status)) {
+        res.status(400).json({ error: "Invalid status" });
+        return;
+      }
+      updates.status = status;
+    }
+
+    const goal = await prisma.goal.update({
+      where: { id: goalId },
+      data: updates,
+    });
+
+    res.status(200).json({ goal });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/goals/:goalId", requireAuth, async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const { goalId } = req.params;
+
+    const existing = await prisma.goal.findFirst({
+      where: { id: goalId, userId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    await prisma.goal.delete({ where: { id: goalId } });
+    res.sendStatus(204);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 app.post("/chats", requireAuth, async (req: JWTRequest, res) => {
   try {
     const userId = req.auth!.sub!;
     const { input } = req.body;
 
     const count = await prisma.chat.count({ where: { userId } });
-    const title = `Chat ${count + 1}`;
 
-    const assistantOutputText = await generateGPT([
-      { role: "user", outputText: input },
-    ]);
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { tutorInstructions: true, displayName: true, username: true },
+    });
+    const nameForTutor = user?.displayName?.trim() || user?.username;
+
+    const assistantOutputText = await generateGPT(
+      [{ role: "user", outputText: input }],
+      user?.tutorInstructions,
+      nameForTutor
+    );
 
     const newChat = await prisma.chat.create({
       data: {
-        title,
+        title: input.slice(0, 30),
         userId,
         messages: {
           create: [
@@ -214,7 +428,17 @@ app.post(
         orderBy: { createdAt: "asc" },
       });
 
-      const assistantOutputText = await generateGPT(context);
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { tutorInstructions: true, displayName: true, username: true },
+      });
+      const nameForTutor = user?.displayName?.trim() || user?.username;
+
+      const assistantOutputText = await generateGPT(
+        context,
+        user?.tutorInstructions,
+        nameForTutor
+      );
 
       const assistantMsg = await prisma.message.create({
         data: {

@@ -18,13 +18,21 @@ enum Role {
   assistant
 }
 
+enum GoalStatus {
+  todo
+  done
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   email     String   @unique
   password  String
   username  String
+  displayName String? @map("display_name")
+  tutorInstructions String? @map("tutor_instructions")
   createdAt DateTime @default(now()) @map("created_at")
   chats     Chat[]
+  goals     Goal[]
 
   @@map("users")
 }
@@ -34,7 +42,7 @@ model Chat {
   title     String
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
-  user      User      @relation(fields: [userId], references: [id])
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String    @map("user_id") @db.Uuid
   messages  Message[]
 
@@ -50,4 +58,17 @@ model Message {
   chatId     String   @map("chat_id") @db.Uuid
 
   @@map("messages")
+}
+
+model Goal {
+  id        String      @id @default(uuid()) @db.Uuid
+  title     String
+  notes     String?
+  status    GoalStatus  @default(todo)
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String      @map("user_id") @db.Uuid
+
+  @@map("goals")
 }
