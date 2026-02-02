@@ -23,16 +23,22 @@ enum GoalStatus {
   done
 }
 
+enum GoalTopicStatus {
+  locked
+  in_progress
+  done
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   email     String   @unique
   password  String
-  username  String
   displayName String? @map("display_name")
   tutorInstructions String? @map("tutor_instructions")
   createdAt DateTime @default(now()) @map("created_at")
   chats     Chat[]
   goals     Goal[]
+  assessmentAttempts AssessmentAttempt[]
 
   @@map("users")
 }
@@ -63,12 +69,74 @@ model Message {
 model Goal {
   id        String      @id @default(uuid()) @db.Uuid
   title     String
+  description String?
+  currentLevel String? @map("current_level")
+  targetLevel String? @map("target_level")
+  minutesPerDay Int? @map("minutes_per_day")
   notes     String?
   status    GoalStatus  @default(todo)
   createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
   user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String      @map("user_id") @db.Uuid
+  topics    GoalTopic[]
+  assessments Assessment[]
 
   @@map("goals")
+}
+
+model GoalTopic {
+  id                 String         @id @default(uuid()) @db.Uuid
+  goal               Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  goalId             String         @map("goal_id") @db.Uuid
+  order              Int
+  title              String
+  summary            String?
+  subtopics          Json?
+  durationWeeks      Int            @map("duration_weeks")
+  status             GoalTopicStatus @default(locked)
+  startAt            DateTime?      @map("start_at")
+  dueAt              DateTime?      @map("due_at")
+  lessonChatId       String?        @map("lesson_chat_id") @db.Uuid
+  assessmentAttemptId String?       @map("assessment_attempt_id") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  assessments        Assessment[]
+
+  @@map("goal_topics")
+}
+
+model Assessment {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  topic       String?
+  level       String?
+  questions   Json
+  isActive    Boolean  @default(true)
+  goal        Goal?    @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  goalId      String?  @map("goal_id") @db.Uuid
+  goalTopic   GoalTopic? @relation(fields: [goalTopicId], references: [id], onDelete: Cascade)
+  goalTopicId String?  @map("goal_topic_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  attempts    AssessmentAttempt[]
+
+  @@map("assessments")
+}
+
+model AssessmentAttempt {
+  id            String   @id @default(uuid()) @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String   @map("user_id") @db.Uuid
+  assessment    Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  assessmentId  String   @map("assessment_id") @db.Uuid
+  questions     Json
+  answers       Json?
+  score         Int?
+  correctCount  Int?     @map("correct_count")
+  totalCount    Int?     @map("total_count")
+  reviewChatId  String?  @map("review_chat_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+  completedAt   DateTime? @map("completed_at")
+
+  @@map("assessment_attempts")
 }

@@ -31,7 +31,7 @@ Built with Express, it uses Prisma for database management and JWT for secure au
 ## 📡 Available Endpoints
 
 `POST /auth/sign-up`  
-Creates a new user account with email, username, and hashed password.
+Creates a new user account with email and hashed password.
 
 `POST /auth/sign-in`  
 Authenticates a user and returns a JWT token with user info.
