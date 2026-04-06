@@ -3,11 +3,13 @@ import { Request as JWTRequest } from "express-jwt";
 import { GoalStatus, GoalTopicStatus } from "@prisma/client";
 
 import prisma from "../db/prisma";
+import { ASSESSMENT_QUESTION_COUNT } from "../config";
 import { requireAuth } from "../middleware/requireAuth";
 import { generateAssessmentQuestions, generateGoalProgram } from "../libs/openai";
 import {
   AssessmentQuestion,
   normalizeGeneratedQuestions,
+  toAssessmentQuestions,
 } from "../services/assessment";
 import {
   addWeeks,
@@ -19,6 +21,11 @@ import { createChatWithPrompt } from "../services/chatService";
 const router = Router();
 
 router.use(requireAuth);
+
+const normalizeSubtopics = (value: unknown) =>
+  Array.isArray(value)
+    ? (value as string[]).map((item) => String(item).trim()).filter(Boolean)
+    : [];
 
 router.get("/", async (req: JWTRequest, res) => {
   try {
@@ -157,12 +164,6 @@ router.post(
       const userId = req.auth!.sub!;
       const { goalId, topicId } = req.params;
       const { regenerate } = (req.body ?? {}) as { regenerate?: boolean };
-      console.info("Start lesson request", {
-        userId,
-        goalId,
-        topicId,
-        regenerate: Boolean(regenerate),
-      });
 
       const topic = await prisma.goalTopic.findFirst({
         where: { id: topicId, goalId, goal: { userId } },
@@ -180,11 +181,6 @@ router.post(
       });
 
       if (!topic) {
-        console.info("Start lesson blocked: topic not found", {
-          userId,
-          goalId,
-          topicId,
-        });
         res.status(404).json({ error: "Topic not found" });
         return;
       }
@@ -192,27 +188,20 @@ router.post(
       const allowRegenerate =
         Boolean(regenerate) && topic.status === GoalTopicStatus.done;
       if (topic.status !== GoalTopicStatus.in_progress && !allowRegenerate) {
-        console.info("Start lesson blocked: topic not available", {
-          topicId: topic.id,
-          status: topic.status,
-          allowRegenerate,
-        });
         res.status(403).json({ error: "Topic is not available" });
         return;
       }
 
       if (topic.lessonChatId) {
-        const existingChat = await prisma.chat.findFirst({
-          where: { id: topic.lessonChatId, userId },
-          select: { id: true },
-        });
-        if (existingChat) {
-          console.info("Start lesson reused existing chat", {
-            topicId: topic.id,
-            chatId: topic.lessonChatId,
+        if (!allowRegenerate) {
+          const existingChat = await prisma.chat.findFirst({
+            where: { id: topic.lessonChatId, userId },
+            select: { id: true },
           });
-          res.status(200).json({ chatId: topic.lessonChatId });
-          return;
+          if (existingChat) {
+            res.status(200).json({ chatId: topic.lessonChatId });
+            return;
+          }
         }
 
         await prisma.goalTopic.update({
@@ -221,9 +210,7 @@ router.post(
         });
       }
 
-      const subtopics = Array.isArray(topic.subtopics)
-        ? (topic.subtopics as string[]).map((item) => String(item).trim())
-        : [];
+      const subtopics = normalizeSubtopics(topic.subtopics);
       const subtopicsLine =
         subtopics.length > 0
           ? `Подтемы: ${subtopics.join(", ")}.`
@@ -256,10 +243,6 @@ router.post(
         prompt,
         `Урок: ${topic.title}`
       );
-      console.info("Start lesson created chat", {
-        topicId: topic.id,
-        chatId: chat.id,
-      });
 
       const now = new Date();
       const startAt = topic.startAt ?? now;
@@ -322,9 +305,7 @@ router.post(
       });
 
       if (existingAssessment && !regenerate) {
-        const questions = Array.isArray(existingAssessment.questions)
-          ? existingAssessment.questions
-          : [];
+        const questions = toAssessmentQuestions(existingAssessment.questions);
         res.status(200).json({
           assessment: {
             id: existingAssessment.id,
@@ -338,9 +319,7 @@ router.post(
         return;
       }
 
-      const subtopics = Array.isArray(topic.subtopics)
-        ? (topic.subtopics as string[]).map((item) => String(item).trim())
-        : [];
+      const subtopics = normalizeSubtopics(topic.subtopics);
       const goalContext = [
         `Дисциплина: ${topic.goal.title}.`,
         `Текущая тема: ${topic.title}.`,
@@ -377,7 +356,7 @@ router.post(
         }
       }
 
-      const questionCount = 3;
+      const questionCount = ASSESSMENT_QUESTION_COUNT;
       let normalizedQuestions: AssessmentQuestion[] = [];
       let lastError: unknown = null;
 
@@ -385,6 +364,7 @@ router.post(
         try {
           const generated = await generateAssessmentQuestions({
             topic: topic.title,
+            questionCount,
             level: topic.goal.currentLevel ?? null,
             goalContext,
             lessonContext,

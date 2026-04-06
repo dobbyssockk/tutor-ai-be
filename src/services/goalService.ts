@@ -59,7 +59,7 @@ export const completeTopicIfReady = async (topicId: string, userId: string) => {
   return prisma.$transaction(async (tx) => {
     const updatedTopic = await tx.goalTopic.update({
       where: { id: topic.id },
-      data: { status: GoalTopicStatus.done, completedAt: now },
+      data: { status: GoalTopicStatus.done },
     });
 
     const nextTopic = await tx.goalTopic.findFirst({

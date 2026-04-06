@@ -27,6 +27,14 @@ Output Format
 - Use conversational language with short sentences.
 - Present guidance in a step-by-step manner.
 - Offer explanations in a clear, concise manner when necessary.
+- For math, use Markdown math delimiters only: inline \`$...$\`, block \`$$...$$\`.
+- Do not use LaTeX delimiters \`\\(...\\)\` or \`\\[...\\]\`.
+- Keep math delimiters balanced: every opened \`$\`/\`$$\` must be closed.
+- Never put regular text, headings, or lists inside a math block.
+- For systems of equations, always use block form:
+  \`$$\\begin{cases} ... \\\\ ... \\end{cases}$$\`
+- If you output LaTeX, output valid KaTeX-compatible LaTeX only.
+- Before finalizing the answer, perform a self-check of math markup. If invalid, rewrite and return only corrected output.
 
 Examples
 

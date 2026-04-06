@@ -14,6 +14,9 @@ export type AssessmentAnswerPayload = {
 export const sanitizeQuestions = (questions: AssessmentQuestion[]) =>
   questions.map(({ id, prompt, options }) => ({ id, prompt, options }));
 
+export const toAssessmentQuestions = (value: unknown): AssessmentQuestion[] =>
+  Array.isArray(value) ? (value as AssessmentQuestion[]) : [];
+
 export const buildAssessmentPrompt = (
   mistakes: Array<{
     prompt: string;
@@ -61,6 +64,32 @@ export const buildAssessmentPrompt = (
 const normalizeOption = (option: string) =>
   option.replace(/^[A-Da-d][\).\-\:]\s+/, "").trim();
 
+export const normalizeAnswer = (value: string) => value.trim().toLowerCase();
+
+const hasUnsupportedVisualReference = (prompt: string) =>
+  /(?:на|по)\s+(?:график(?:е|у)?|диаграмм(?:е|у)?|рисунк(?:е|у)?|изображени(?:и|ю)?|схем(?:е|у)|таблиц(?:е|у))\b|график\s+показывает\b/i.test(
+    prompt
+  );
+
+export const getRequiredPasses = (
+  dueAt: Date | string | null | undefined,
+  passingAttempts: Array<{ completedAt: Date | null }>,
+  now = new Date()
+) => {
+  if (!dueAt) return 1;
+
+  const dueAtDate = new Date(dueAt);
+  const hasPassBeforeDeadline = passingAttempts.some(
+    (attempt) => attempt.completedAt && attempt.completedAt <= dueAtDate
+  );
+
+  if (now > dueAtDate && !hasPassBeforeDeadline) {
+    return 2;
+  }
+
+  return 1;
+};
+
 export const buildAttemptResults = (
   questions: AssessmentQuestion[],
   answers: AssessmentAnswerPayload[]
@@ -71,7 +100,8 @@ export const buildAttemptResults = (
 
   const results = questions.map((question) => {
     const answer = answerMap.get(question.id) ?? "";
-    const isCorrect = answer === question.correctAnswer;
+    const isCorrect =
+      normalizeAnswer(answer) === normalizeAnswer(question.correctAnswer);
     return {
       question,
       answer,
@@ -106,6 +136,7 @@ const isQuestionValid = (question: AssessmentQuestion) => {
   const options = Array.isArray(question.options) ? question.options : [];
   return (
     Boolean(question.prompt?.trim()) &&
+    !hasUnsupportedVisualReference(question.prompt) &&
     options.length === 4 &&
     options.every((option) => Boolean(option?.trim())) &&
     options.includes(question.correctAnswer)

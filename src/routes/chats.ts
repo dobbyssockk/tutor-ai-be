@@ -3,8 +3,10 @@ import { Request as JWTRequest } from "express-jwt";
 
 import prisma from "../db/prisma";
 import { requireAuth } from "../middleware/requireAuth";
-import { createChatWithPrompt } from "../services/chatService";
-import { generateGPT } from "../libs/openai";
+import {
+  createChatWithPrompt,
+  generateAssistantTextForUser,
+} from "../services/chatService";
 
 const router = Router();
 
@@ -27,7 +29,12 @@ router.get("/", async (req: JWTRequest, res) => {
 router.post("/", async (req: JWTRequest, res) => {
   try {
     const userId = req.auth!.sub!;
-    const { input } = req.body;
+    const input =
+      typeof req.body?.input === "string" ? req.body.input.trim() : "";
+    if (!input) {
+      res.status(400).json({ error: "Content is required" });
+      return;
+    }
     const newChat = await createChatWithPrompt(userId, input);
     res.status(201).json({ chat: newChat });
   } catch (err) {
@@ -44,6 +51,56 @@ router.get("/:chatId", async (req: JWTRequest, res) => {
       where: { id, userId },
       include: { messages: true },
     });
+    if (!chat) {
+      res.status(404).json({ error: "Chat not found" });
+      return;
+    }
+    res.status(200).json({ chat });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.patch("/:chatId", async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const { chatId } = req.params;
+    const title =
+      typeof req.body?.title === "string" ? req.body.title.trim() : "";
+
+    if (!title) {
+      res.status(400).json({ error: "Title is required" });
+      return;
+    }
+
+    if (title.length > 120) {
+      res.status(400).json({ error: "Title is too long" });
+      return;
+    }
+
+    const updated = await prisma.chat.updateMany({
+      where: { id: chatId, userId },
+      data: {
+        title,
+        updatedAt: new Date(),
+      },
+    });
+
+    if (!updated.count) {
+      res.status(404).json({ error: "Chat not found" });
+      return;
+    }
+
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, userId },
+    });
+
+    if (!chat) {
+      res.status(404).json({ error: "Chat not found" });
+      return;
+    }
+
     res.status(200).json({ chat });
   } catch (err) {
     console.error(err);
@@ -55,13 +112,17 @@ router.delete("/:chatId", async (req: JWTRequest, res) => {
   try {
     const id = req.params.chatId;
     const userId = req.auth!.sub!;
-    await prisma.$transaction(async (tx) => {
+    const deleted = await prisma.$transaction(async (tx) => {
       await tx.goalTopic.updateMany({
         where: { lessonChatId: id, goal: { userId } },
         data: { lessonChatId: null },
       });
-      await tx.chat.delete({ where: { id, userId } });
+      return tx.chat.deleteMany({ where: { id, userId } });
     });
+    if (!deleted.count) {
+      res.status(404).json({ error: "Chat not found" });
+      return;
+    }
     res.sendStatus(204);
   } catch (err) {
     console.error(err);
@@ -99,9 +160,10 @@ router.post("/:chatId/messages", async (req: JWTRequest, res) => {
   try {
     const userId = req.auth!.sub!;
     const { chatId } = req.params;
-    const { input } = req.body;
+    const input =
+      typeof req.body?.input === "string" ? req.body.input.trim() : "";
 
-    if (!input.trim()) {
+    if (!input) {
       res.status(400).json({ error: "Content is required" });
       return;
     }
@@ -124,15 +186,10 @@ router.post("/:chatId/messages", async (req: JWTRequest, res) => {
       orderBy: { createdAt: "asc" },
     });
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { tutorInstructions: true, displayName: true, email: true },
-    });
-
-    const assistantOutputText = await generateGPT(
+    const assistantOutputText = await generateAssistantTextForUser(
+      userId,
       context,
-      user?.tutorInstructions,
-      user?.displayName
+      "Извините, сейчас не удалось сгенерировать ответ. Попробуйте позже."
     );
 
     const assistantMsg = await prisma.message.create({

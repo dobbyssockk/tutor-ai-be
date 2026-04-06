@@ -12,12 +12,48 @@ const router = Router();
 const createJWT = (id: string) =>
   jwt.sign({ sub: id }, JWT_SECRET, { expiresIn: "30d" });
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const normalizeString = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+const normalizeEmail = (value: unknown) => normalizeString(value).toLowerCase();
+const normalizeOptionalString = (value: unknown) => {
+  if (value === undefined) return undefined;
+  const trimmed = normalizeString(value);
+  return trimmed || null;
+};
+
+const toPublicUser = (user: {
+  id: string;
+  email: string;
+  displayName: string | null;
+  tutorInstructions: string | null;
+  createdAt: Date;
+}) => ({
+  id: user.id,
+  email: user.email,
+  displayName: user.displayName,
+  tutorInstructions: user.tutorInstructions,
+  createdAt: user.createdAt,
+});
+
 router.post("/sign-up", async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
-    const normalizedEmail = (email || "").trim().toLowerCase();
-    const trimmedDisplayName =
-      typeof displayName === "string" ? displayName.trim() : "";
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedPassword = typeof password === "string" ? password : "";
+    const trimmedDisplayName = normalizeString(displayName);
+
+    if (!normalizedEmail || !EMAIL_RE.test(normalizedEmail)) {
+      res.status(400).json({ message: "A valid email is required" });
+      return;
+    }
+
+    if (normalizedPassword.length < 6) {
+      res
+        .status(400)
+        .json({ message: "Password must be at least 6 characters" });
+      return;
+    }
 
     const existingUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -27,7 +63,10 @@ router.post("/sign-up", async (req, res) => {
       return;
     }
 
-    const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
+    const hashedPassword = await bcrypt.hash(
+      normalizedPassword,
+      BCRYPT_SALT_ROUNDS
+    );
     const newUser = await prisma.user.create({
       data: {
         email: normalizedEmail,
@@ -40,13 +79,7 @@ router.post("/sign-up", async (req, res) => {
 
     res.status(201).json({
       token,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        displayName: newUser.displayName,
-        tutorInstructions: newUser.tutorInstructions,
-        createdAt: newUser.createdAt,
-      },
+      user: toPublicUser(newUser),
     });
   } catch (err) {
     console.error(err);
@@ -57,12 +90,22 @@ router.post("/sign-up", async (req, res) => {
 router.post("/sign-in", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const normalizedEmail = (email || "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedPassword = typeof password === "string" ? password : "";
+
+    if (
+      !normalizedEmail ||
+      !EMAIL_RE.test(normalizedEmail) ||
+      !normalizedPassword
+    ) {
+      res.status(400).json({ message: "Email and password are required" });
+      return;
+    }
 
     const user = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user || !(await bcrypt.compare(normalizedPassword, user.password))) {
       res.status(401).json({ message: "Invalid email or password" });
       return;
     }
@@ -71,13 +114,7 @@ router.post("/sign-in", async (req, res) => {
 
     res.status(200).json({
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        tutorInstructions: user.tutorInstructions,
-        createdAt: user.createdAt,
-      },
+      user: toPublicUser(user),
     });
   } catch (err) {
     console.error(err);
@@ -90,13 +127,7 @@ router.get("/me", requireAuth, async (req: JWTRequest, res) => {
     const id = req.auth!.sub!;
     const user = await prisma.user.findUniqueOrThrow({ where: { id } });
     res.status(200).json({
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        tutorInstructions: user.tutorInstructions,
-        createdAt: user.createdAt,
-      },
+      user: toPublicUser(user),
     });
   } catch (err) {
     console.error(err);
@@ -118,13 +149,11 @@ router.patch("/me", requireAuth, async (req: JWTRequest, res) => {
     } = {};
 
     if (tutorInstructions !== undefined) {
-      const trimmed = tutorInstructions?.trim();
-      updateData.tutorInstructions = trimmed ? trimmed : null;
+      updateData.tutorInstructions = normalizeOptionalString(tutorInstructions);
     }
 
     if (displayName !== undefined) {
-      const trimmed = displayName?.trim();
-      updateData.displayName = trimmed ? trimmed : null;
+      updateData.displayName = normalizeOptionalString(displayName);
     }
 
     const user = await prisma.user.update({
@@ -133,13 +162,7 @@ router.patch("/me", requireAuth, async (req: JWTRequest, res) => {
     });
 
     res.status(200).json({
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        tutorInstructions: user.tutorInstructions,
-        createdAt: user.createdAt,
-      },
+      user: toPublicUser(user),
     });
   } catch (err) {
     console.error(err);
@@ -150,24 +173,11 @@ router.patch("/me", requireAuth, async (req: JWTRequest, res) => {
 router.delete("/me", requireAuth, async (req: JWTRequest, res) => {
   try {
     const userId = req.auth!.sub!;
-
-    await prisma.$transaction(async (tx) => {
-      const chats = await tx.chat.findMany({
-        where: { userId },
-        select: { id: true },
-      });
-      const chatIds = chats.map((chat) => chat.id);
-
-      if (chatIds.length > 0) {
-        await tx.message.deleteMany({
-          where: { chatId: { in: chatIds } },
-        });
-      }
-
-      await tx.chat.deleteMany({ where: { userId } });
-      await tx.goal.deleteMany({ where: { userId } });
-      await tx.user.delete({ where: { id: userId } });
-    });
+    const result = await prisma.user.deleteMany({ where: { id: userId } });
+    if (!result.count) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
 
     res.sendStatus(204);
   } catch (err) {

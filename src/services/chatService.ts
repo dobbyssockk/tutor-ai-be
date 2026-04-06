@@ -1,9 +1,35 @@
 import prisma from "../db/prisma";
 import { generateGPT } from "../libs/openai";
 
-type Message = {
+export type ChatContextMessage = {
   role: "user" | "assistant";
   outputText: string;
+};
+
+const DEFAULT_ASSISTANT_FALLBACK =
+  "Извините, сейчас не удалось сгенерировать ответ. Попробуйте позже.";
+
+export const generateAssistantTextForUser = async (
+  userId: string,
+  context: ChatContextMessage[],
+  fallbackText = DEFAULT_ASSISTANT_FALLBACK,
+  errorLabel = "Generate GPT failed"
+) => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { tutorInstructions: true, displayName: true },
+  });
+
+  try {
+    return await generateGPT(
+      context,
+      user?.tutorInstructions,
+      user?.displayName
+    );
+  } catch (err) {
+    console.error(errorLabel, err);
+    return fallbackText;
+  }
 };
 
 export const createChatWithPrompt = async (
@@ -11,31 +37,24 @@ export const createChatWithPrompt = async (
   input: string,
   title?: string
 ) => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { tutorInstructions: true, displayName: true, email: true },
-  });
-
-  let assistantOutputText = "";
-  try {
-    assistantOutputText = await generateGPT(
-      [{ role: "user", outputText: input } as Message],
-      user?.tutorInstructions,
-      user?.displayName
-    );
-  } catch (err) {
-    console.error("Generate GPT failed", err);
-    assistantOutputText =
-      "Извините, сейчас не удалось сгенерировать ответ. Попробуйте позже.";
+  const normalizedInput = input.trim();
+  if (!normalizedInput) {
+    throw new Error("Content is required");
   }
+
+  const assistantOutputText = await generateAssistantTextForUser(
+    userId,
+    [{ role: "user", outputText: normalizedInput }],
+    DEFAULT_ASSISTANT_FALLBACK
+  );
 
   return prisma.chat.create({
     data: {
-      title: title?.trim() || input.slice(0, 30),
+      title: title?.trim() || normalizedInput.slice(0, 30),
       userId,
       messages: {
         create: [
-          { role: "user", outputText: input },
+          { role: "user", outputText: normalizedInput },
           { role: "assistant", outputText: assistantOutputText },
         ],
       },

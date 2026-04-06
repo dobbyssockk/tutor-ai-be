@@ -3,21 +3,99 @@ import { Request as JWTRequest } from "express-jwt";
 import { GoalTopicStatus } from "@prisma/client";
 
 import prisma from "../db/prisma";
-import { PASSING_SCORE } from "../config";
+import { EXPOSE_CORRECT_ANSWERS, PASSING_SCORE } from "../config";
 import { requireAuth } from "../middleware/requireAuth";
 import {
   AssessmentAnswerPayload,
   AssessmentQuestion,
   buildAssessmentPrompt,
   buildAttemptResults,
+  getRequiredPasses,
+  normalizeAnswer,
   sanitizeQuestions,
+  toAssessmentQuestions,
 } from "../services/assessment";
 import { completeTopicIfReady } from "../services/goalService";
-import { generateGPT } from "../libs/openai";
+import { generateAssistantTextForUser } from "../services/chatService";
 
 const router = Router();
 
 router.use(requireAuth);
+
+const formatAttemptQuestions = (questions: AssessmentQuestion[]) => {
+  const sanitized = sanitizeQuestions(questions);
+  if (!EXPOSE_CORRECT_ANSWERS) return sanitized;
+
+  const answerById = new Map(
+    questions.map((question) => [question.id, question.correctAnswer])
+  );
+
+  return sanitized.map((question) => ({
+    ...question,
+    correctAnswer: answerById.get(question.id) ?? "",
+  }));
+};
+
+const formatAttemptResponse = (
+  attempt: {
+    id: string;
+    assessmentId: string;
+    totalCount: number | null;
+    createdAt: Date;
+  },
+  questions: AssessmentQuestion[]
+) => ({
+  id: attempt.id,
+  assessmentId: attempt.assessmentId,
+  questions: formatAttemptQuestions(questions),
+  totalCount: attempt.totalCount ?? questions.length,
+  createdAt: attempt.createdAt,
+});
+
+const buildReviewPromptData = (
+  questions: AssessmentQuestion[],
+  answers: AssessmentAnswerPayload[]
+) => {
+  const { mistakes, correctCount, totalCount } = buildAttemptResults(
+    questions,
+    answers
+  );
+  const prompt = buildAssessmentPrompt(mistakes);
+  const fallbackReviewText =
+    mistakes.length === 0
+      ? "Отличный результат. Все ответы верные. Продолжай в том же темпе."
+      : [
+          "Не удалось сгенерировать подробный разбор сейчас.",
+          "Краткий итог:",
+          `- Верных ответов: ${correctCount} из ${totalCount}`,
+          `- Ошибок: ${mistakes.length}`,
+          "Попробуй открыть разбор позже или попроси тьютора объяснить сложные вопросы.",
+        ].join("\n");
+
+  return {
+    mistakes,
+    prompt,
+    fallbackReviewText,
+  };
+};
+
+const buildReviewChatTitle = ({
+  assessmentTitle,
+  assessmentTopic,
+}: {
+  assessmentTitle?: string | null;
+  assessmentTopic?: string | null;
+}) => {
+  const base = (assessmentTitle || "").trim();
+  if (base.length > 0) {
+    return `Разбор теста: ${base}`.slice(0, 120);
+  }
+  const topic = (assessmentTopic || "").trim();
+  if (topic.length > 0) {
+    return `Разбор ошибок: ${topic}`.slice(0, 120);
+  }
+  return "Разбор ошибок теста";
+};
 
 router.get("/", async (req: JWTRequest, res) => {
   try {
@@ -77,12 +155,8 @@ router.get("/", async (req: JWTRequest, res) => {
     const now = new Date();
 
     const formatted = assessments.map((assessment) => {
-      const questions = Array.isArray(assessment.questions)
-        ? assessment.questions
-        : [];
+      const questions = toAssessmentQuestions(assessment.questions);
       const lastAttempt = lastCompleted.get(assessment.id);
-      let canStart = true;
-      let nextAvailableAt: string | null = null;
 
       const relatedAttempts = attemptsByAssessment.get(assessment.id) ?? [];
       const passingAttempts = relatedAttempts.filter(
@@ -98,16 +172,11 @@ router.get("/", async (req: JWTRequest, res) => {
           completedAt: attempt.completedAt,
         }));
       const passesCompleted = passingAttempts.length;
-      let passesRequired = 1;
-      if (assessment.goalTopic?.dueAt) {
-        const dueAtDate = new Date(assessment.goalTopic.dueAt);
-        const hasPassBeforeDeadline = passingAttempts.some(
-          (attempt) => attempt.completedAt && attempt.completedAt <= dueAtDate
-        );
-        if (now > dueAtDate && !hasPassBeforeDeadline) {
-          passesRequired = 2;
-        }
-      }
+      const passesRequired = getRequiredPasses(
+        assessment.goalTopic?.dueAt,
+        passingAttempts,
+        now
+      );
 
       return {
         id: assessment.id,
@@ -132,8 +201,8 @@ router.get("/", async (req: JWTRequest, res) => {
               completedAt: lastAttempt.completedAt,
             }
           : null,
-        canStart,
-        nextAvailableAt,
+        canStart: true,
+        nextAvailableAt: null,
       };
     });
 
@@ -182,22 +251,7 @@ router.post("/:assessmentId/attempts", async (req: JWTRequest, res) => {
       }
     }
 
-    const lastCompletedAttempt = await prisma.assessmentAttempt.findFirst({
-      where: {
-        assessmentId: assessment.id,
-        userId,
-        completedAt: { not: null },
-      },
-      orderBy: { completedAt: "desc" },
-    });
-
-    const lastAttemptPassed =
-      typeof lastCompletedAttempt?.score === "number" &&
-      lastCompletedAttempt.score >= PASSING_SCORE;
-
-    const questions = Array.isArray(assessment.questions)
-      ? (assessment.questions as AssessmentQuestion[])
-      : [];
+    const questions = toAssessmentQuestions(assessment.questions);
     if (questions.length === 0) {
       res.status(400).json({ error: "Assessment has no questions" });
       return;
@@ -213,13 +267,7 @@ router.post("/:assessmentId/attempts", async (req: JWTRequest, res) => {
     });
 
     res.status(201).json({
-      attempt: {
-        id: attempt.id,
-        assessmentId: attempt.assessmentId,
-        questions: sanitizeQuestions(questions),
-        totalCount: attempt.totalCount ?? questions.length,
-        createdAt: attempt.createdAt,
-      },
+      attempt: formatAttemptResponse(attempt, questions),
     });
   } catch (err) {
     console.error(err);
@@ -234,7 +282,6 @@ router.get("/attempts/:attemptId", async (req: JWTRequest, res) => {
 
     const attempt = await prisma.assessmentAttempt.findFirst({
       where: { id: attemptId, userId },
-      include: { assessment: { select: { goalTopicId: true } } },
     });
 
     if (!attempt) {
@@ -242,18 +289,10 @@ router.get("/attempts/:attemptId", async (req: JWTRequest, res) => {
       return;
     }
 
-    const questions = Array.isArray(attempt.questions)
-      ? (attempt.questions as AssessmentQuestion[])
-      : [];
+    const questions = toAssessmentQuestions(attempt.questions);
 
     res.status(200).json({
-      attempt: {
-        id: attempt.id,
-        assessmentId: attempt.assessmentId,
-        questions: sanitizeQuestions(questions),
-        totalCount: attempt.totalCount ?? questions.length,
-        createdAt: attempt.createdAt,
-      },
+      attempt: formatAttemptResponse(attempt, questions),
     });
   } catch (err) {
     console.error(err);
@@ -282,44 +321,13 @@ router.post("/attempts/:attemptId/submit", async (req: JWTRequest, res) => {
       return;
     }
 
-    const questions = Array.isArray(attempt.questions)
-      ? (attempt.questions as AssessmentQuestion[])
-      : [];
+    const questions = toAssessmentQuestions(attempt.questions);
 
     const { mistakes, correctCount, totalCount, score } = buildAttemptResults(
       questions,
       answers
     );
     const isPassingScore = score >= PASSING_SCORE;
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        tutorInstructions: true,
-        displayName: true,
-        email: true,
-      },
-    });
-    const prompt = buildAssessmentPrompt(mistakes);
-
-    const assistantOutputText = await generateGPT(
-      [{ role: "user", outputText: prompt }],
-      user?.tutorInstructions,
-      user?.displayName
-    );
-
-    const reviewChat = await prisma.chat.create({
-      data: {
-        title: "Assessment review",
-        userId,
-        messages: {
-          create: [
-            { role: "user", outputText: prompt },
-            { role: "assistant", outputText: assistantOutputText },
-          ],
-        },
-      },
-    });
 
     const updatedAttempt = await prisma.assessmentAttempt.update({
       where: { id: attemptId },
@@ -329,7 +337,6 @@ router.post("/attempts/:attemptId/submit", async (req: JWTRequest, res) => {
         correctCount,
         totalCount,
         completedAt: new Date(),
-        reviewChatId: reviewChat.id,
       },
     });
 
@@ -350,16 +357,7 @@ router.post("/attempts/:attemptId/submit", async (req: JWTRequest, res) => {
           select: { completedAt: true },
         });
         const passesCompleted = passingAttempts.length;
-        let passesRequired = 1;
-        if (topic.dueAt) {
-          const dueAtDate = new Date(topic.dueAt);
-          const hasPassBeforeDeadline = passingAttempts.some(
-            (item) => item.completedAt && item.completedAt <= dueAtDate
-          );
-          if (new Date() > dueAtDate && !hasPassBeforeDeadline) {
-            passesRequired = 2;
-          }
-        }
+        const passesRequired = getRequiredPasses(topic.dueAt, passingAttempts);
 
         if (passesCompleted >= passesRequired) {
           await prisma.goalTopic.update({
@@ -380,7 +378,7 @@ router.post("/attempts/:attemptId/submit", async (req: JWTRequest, res) => {
         totalCount: updatedAttempt.totalCount ?? totalCount,
         completedAt: updatedAttempt.completedAt,
       },
-      chatId: reviewChat.id,
+      chatId: updatedAttempt.reviewChatId ?? null,
       mistakesCount: mistakes.length,
     });
   } catch (err) {
@@ -412,16 +410,14 @@ router.get("/attempts/:attemptId/results", async (req: JWTRequest, res) => {
       return;
     }
 
-    if (!attempt.completedAt || !attempt.reviewChatId) {
+    if (!attempt.completedAt) {
       res.status(400).json({ error: "Assessment not completed yet" });
       return;
     }
 
     const totalCount = attempt.totalCount ?? 0;
     const correctCount = attempt.correctCount ?? 0;
-    const questions = Array.isArray(attempt.questions)
-      ? (attempt.questions as AssessmentQuestion[])
-      : [];
+    const questions = toAssessmentQuestions(attempt.questions);
     const answers = Array.isArray(attempt.answers)
       ? (attempt.answers as AssessmentAnswerPayload[])
       : [];
@@ -436,7 +432,9 @@ router.get("/attempts/:attemptId/results", async (req: JWTRequest, res) => {
         options: question.options,
         correctAnswer: question.correctAnswer,
         userAnswer,
-        isCorrect: userAnswer === question.correctAnswer,
+        isCorrect:
+          normalizeAnswer(userAnswer) ===
+          normalizeAnswer(question.correctAnswer),
         explanation: question.explanation ?? null,
       };
     });
@@ -449,12 +447,96 @@ router.get("/attempts/:attemptId/results", async (req: JWTRequest, res) => {
         correctCount,
         totalCount,
         completedAt: attempt.completedAt,
-        chatId: attempt.reviewChatId,
+        chatId: attempt.reviewChatId ?? null,
         mistakesCount: Math.max(totalCount - correctCount, 0),
         goalId: attempt.assessment?.goalId ?? null,
         goalTopicId: attempt.assessment?.goalTopicId ?? null,
         review,
       },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/attempts/:attemptId/review-chat", async (req: JWTRequest, res) => {
+  try {
+    const userId = req.auth!.sub!;
+    const { attemptId } = req.params;
+
+    const attempt = await prisma.assessmentAttempt.findFirst({
+      where: { id: attemptId, userId },
+      select: {
+        id: true,
+        completedAt: true,
+        reviewChatId: true,
+        questions: true,
+        answers: true,
+        assessment: {
+          select: {
+            title: true,
+            topic: true,
+          },
+        },
+      },
+    });
+
+    if (!attempt) {
+      res.status(404).json({ error: "Attempt not found" });
+      return;
+    }
+
+    if (!attempt.completedAt) {
+      res.status(400).json({ error: "Assessment not completed yet" });
+      return;
+    }
+
+    if (attempt.reviewChatId) {
+      res.status(200).json({ chatId: attempt.reviewChatId });
+      return;
+    }
+
+    const questions = toAssessmentQuestions(attempt.questions);
+    const answers = Array.isArray(attempt.answers)
+      ? (attempt.answers as AssessmentAnswerPayload[])
+      : [];
+    const { prompt, fallbackReviewText } = buildReviewPromptData(
+      questions,
+      answers
+    );
+
+    const assistantOutputText = await generateAssistantTextForUser(
+      userId,
+      [{ role: "user", outputText: prompt }],
+      fallbackReviewText,
+      "Assessment review generation failed"
+    );
+
+    const reviewChat = await prisma.chat.create({
+      data: {
+        title: buildReviewChatTitle({
+          assessmentTitle: attempt.assessment?.title ?? null,
+          assessmentTopic: attempt.assessment?.topic ?? null,
+        }),
+        userId,
+        messages: {
+          create: [
+            { role: "user", outputText: prompt },
+            { role: "assistant", outputText: assistantOutputText },
+          ],
+        },
+      },
+    });
+
+    const updatedAttempt = await prisma.assessmentAttempt.update({
+      where: { id: attempt.id },
+      data: { reviewChatId: reviewChat.id },
+      select: { reviewChatId: true },
+    });
+
+    res.status(201).json({
+      chatId: updatedAttempt.reviewChatId ?? reviewChat.id,
     });
   } catch (err) {
     console.error(err);
