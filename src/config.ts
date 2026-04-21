@@ -21,5 +21,5 @@ export const ASSESSMENT_QUESTION_COUNT =
   Number.isInteger(parsedAssessmentQuestionCount) &&
   parsedAssessmentQuestionCount > 0
     ? parsedAssessmentQuestionCount
-    : 3;
+    : 12;
 export const PASSING_SCORE = 70;

@@ -95,15 +95,20 @@ const normalizeQuadraticSpec = (
   if (a === null || b === null || c === null) return null;
 
   const ranges = isRecord(raw.ranges) ? raw.ranges : {};
+  const normalizedA = round(clamp(a, -MAX_ABS_COEFF, MAX_ABS_COEFF));
+  const defaultTitle =
+    normalizedA === 0
+      ? "Интерактивная линейная функция"
+      : "Интерактивная квадратичная функция";
 
   return {
     type: "quadratic_explorer",
     title:
       typeof raw.title === "string" && raw.title.trim()
         ? raw.title.trim().slice(0, 120)
-        : "Интерактивная квадратичная функция",
+        : defaultTitle,
     params: {
-      a: round(clamp(a, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
+      a: normalizedA,
       b: round(clamp(b, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
       c: round(clamp(c, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
     },
