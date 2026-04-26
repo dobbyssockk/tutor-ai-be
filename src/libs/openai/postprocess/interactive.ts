@@ -1,10 +1,13 @@
 import {
+  ChartInteractiveSpec,
   ComparisonExplorerSeries,
   ComparisonExplorerSpec,
   InteractiveRange,
   InteractiveSpec,
   LinearExplorerSpec,
+  MediaGalleryExplorerSpec,
   SingleInteractiveSpec,
+  TimelineExplorerSpec,
   TrigExplorerSpec,
   TrigFunction,
 } from "./types";
@@ -16,16 +19,30 @@ const GEOMETRY_BLOCK_STRIP_RE = /```geometry\s*[\s\S]*?```/gi;
 
 const VIS_REQUEST_RE =
   /(построй|нарисуй|визуализ|график|функц|plot|graph|draw|visual)/i;
+const MEDIA_REQUEST_RE =
+  /(покажи|показать|показ|найди|подбери|show|display|find).*(изображ|картин|фото|video|видео|gallery|галере)|((изображ|картин|фото|video|видео|gallery|галере).*(покажи|показать|show|display))/i;
 const GRAPH_CONTEXT_RE =
   /(график|диаграм|функц|уравнен|парабол|линейн|plot|graph|equation|function|chart|quadratic|linear)/i;
 const TRIG_CONTEXT_RE =
   /(тригоном|sin|cos|tan|sine|cosine|tangent|синус|косинус|тангенс)/i;
+const NON_MATH_VIS_CONTEXT_RE =
+  /(биолог|литератур|истор|таймлайн|timeline|этап|стад|процесс|цикл|фото|изображ|картин|иллюстрац|галере|media|image|video|видео)/i;
 const COMPARE_CONTEXT_RE =
   /(сравн|сопостав|налож|на одном|вместе|одновременно|compare|comparison|overlay|superimpos|both|vs)/i;
+const TIMELINE_REQUEST_RE =
+  /(таймлайн|timeline|этап|по этапам|стад|фаз|разбери|разбор|сюжет|главн(ые|ых)\s+событ|ключев(ые|ых)\s+событ)/i;
+const LITERATURE_CONTEXT_RE =
+  /(литератур|книг|роман|повест|рассказ|поэм|произведен|сюжет|персонаж|геро|автор)/i;
 const SUPPORTED_GRAPH_KIND_RE =
   /(y\s*=|парабол|линейн|квадрат|тригоном|sin|cos|tan|linear|quadratic|trig|function|функц)/i;
+const SUPPORTED_VIS_KIND_RE = new RegExp(
+  `${SUPPORTED_GRAPH_KIND_RE.source}|${NON_MATH_VIS_CONTEXT_RE.source}`,
+  "i"
+);
 const UNSUPPORTED_VIS_RE =
   /(геометр|фигур|треуголь|прямоуголь|круг|окружност|многоуголь|отрезок|конус|цилиндр|сфер|пирамид|куб|призм|3d|three[- ]?d|solid|shape|triangle|rectangle|circle|polygon|segment|cone|cylinder|sphere|pyramid|cube|prism)/i;
+const CANT_SHOW_MEDIA_RE =
+  /(не могу|не умею|не способен|cannot|can't).*(показ|изображ|картин|фото|video|видео|image)/i;
 
 const MAX_ABS_COEFF = 100;
 const DEFAULT_RANGES: Record<"a" | "b" | "c", InteractiveRange> = {
@@ -123,7 +140,7 @@ const normalizeLinearSpec = (
 
 const normalizeQuadraticSpec = (
   raw: Record<string, unknown>
-): SingleInteractiveSpec | null => {
+): ChartInteractiveSpec | null => {
   const params = isRecord(raw.params) ? raw.params : raw;
   const a = toFiniteNumber(params.a);
   const b = toFiniteNumber(params.b);
@@ -199,9 +216,444 @@ const normalizeTrigSpec = (raw: Record<string, unknown>): TrigExplorerSpec | nul
   };
 };
 
+const normalizeSubject = (value: unknown): TimelineExplorerSpec["subject"] => {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (/(биолог|biology|bio)/i.test(raw)) return "biology";
+  if (/(литерат|literature|book|poem|author)/i.test(raw))
+    return "literature";
+  if (/(истор|history)/i.test(raw)) return "history";
+  return "general";
+};
+
+const sanitizeStepTitle = (value: unknown) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 120)
+    : null;
+
+const sanitizeStepDetails = (value: unknown) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 600)
+    : undefined;
+
+const sanitizeStepPeriod = (value: unknown) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 80)
+    : undefined;
+
+const sanitizeMediaQuery = (value: unknown) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 120)
+    : undefined;
+
+const sanitizeStringList = (
+  value: unknown,
+  maxItems: number,
+  maxItemLength: number
+) => {
+  if (!Array.isArray(value)) return undefined;
+
+  const normalized = value
+    .map((item) =>
+      typeof item === "string" && item.trim()
+        ? item.trim().slice(0, maxItemLength)
+        : null
+    )
+    .filter((item): item is string => Boolean(item))
+    .slice(0, maxItems);
+
+  return normalized.length ? normalized : undefined;
+};
+
+const derivePointsFromDetails = (details?: string) => {
+  if (!details) return undefined;
+
+  const points = details
+    .split(/[.!?;]+/g)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 8)
+    .slice(0, 5);
+
+  if (points.length) return points;
+  return [details];
+};
+
+const normalizeTimelineSpec = (
+  raw: Record<string, unknown>
+): TimelineExplorerSpec | null => {
+  const rawSteps = Array.isArray(raw.steps)
+    ? raw.steps
+    : Array.isArray(raw.events)
+      ? raw.events
+      : Array.isArray(raw.stages)
+        ? raw.stages
+        : null;
+
+  if (!rawSteps || rawSteps.length < 2) return null;
+
+  const steps: TimelineExplorerSpec["steps"] = [];
+  for (let index = 0; index < rawSteps.length && steps.length < 12; index += 1) {
+    const item = rawSteps[index];
+    if (!isRecord(item)) continue;
+
+    const title =
+      sanitizeStepTitle(item.title) ??
+      sanitizeStepTitle(item.name) ??
+      sanitizeStepTitle(item.label);
+    if (!title) continue;
+
+    const id =
+      typeof item.id === "string" && item.id.trim()
+        ? item.id.trim().slice(0, 40)
+        : `step_${index + 1}`;
+
+    const details = sanitizeStepDetails(item.details ?? item.description ?? item.text);
+    const rawKeyPoints = sanitizeStringList(
+      item.keyPoints ?? item.points ?? item.highlights ?? item.facts,
+      8,
+      180
+    );
+    const fallbackPoints = derivePointsFromDetails(details);
+    const keyPoints = rawKeyPoints ?? fallbackPoints;
+    const outcomes =
+      sanitizeStringList(
+        item.outcomes ?? item.results ?? item.effects ?? item.conclusion,
+        6,
+        180
+      ) ??
+      (keyPoints?.length ? [keyPoints[keyPoints.length - 1] as string] : undefined);
+
+    const checkQuestion =
+      sanitizeStepDetails(item.checkQuestion ?? item.question ?? item.quizQuestion) ??
+      `Что важно запомнить про этап «${title}»?`;
+    const checkAnswer =
+      sanitizeStepDetails(item.checkAnswer ?? item.answer ?? item.quizAnswer) ??
+      keyPoints?.[0] ??
+      details;
+
+    steps.push({
+      id,
+      title,
+      details,
+      period: sanitizeStepPeriod(item.period ?? item.year ?? item.era),
+      imageQuery: sanitizeMediaQuery(
+        item.imageQuery ?? item.mediaQuery ?? item.searchQuery
+      ),
+      imageCaption: sanitizeStepDetails(
+        item.imageCaption ?? item.caption ?? item.imageNote
+      ),
+      keyPoints,
+      outcomes,
+      terms: sanitizeStringList(
+        item.terms ?? item.keywords ?? item.glossary,
+        10,
+        60
+      ),
+      commonMistake: sanitizeStepDetails(
+        item.commonMistake ?? item.mistake ?? item.warning
+      ),
+      checkQuestion,
+      checkAnswer,
+    });
+  }
+
+  if (steps.length < 2) return null;
+
+  const initialStepId =
+    typeof raw.initialStepId === "string" &&
+    steps.some((step) => step.id === raw.initialStepId)
+      ? raw.initialStepId
+      : steps[0]?.id;
+
+  return {
+    type: "timeline_explorer",
+    title: sanitizeTitle(raw.title, "Интерактивный таймлайн"),
+    subject: normalizeSubject(raw.subject ?? raw.discipline),
+    steps,
+    initialStepId,
+  };
+};
+
+const normalizeMediaType = (
+  value: unknown
+): MediaGalleryExplorerSpec["mediaType"] => {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim().toLowerCase();
+  if (raw === "video" || raw === "videos" || raw === "видео") return "video";
+  if (raw === "image" || raw === "images" || raw === "photo" || raw === "фото")
+    return "image";
+  return undefined;
+};
+
+const sanitizeMediaSearchQuery = (value: string) =>
+  value
+    .replace(
+      /\b(пожалуйста|пж|please|покажи|показать|показ|найди|подбери|show|display|find|give|мне|по|теме|тема|про|about|for|изображени[ея]?|изображение|картин(?:ка|ки|ку|а)?|фото|видео|video|image|images|gallery|галере(?:я|ю|и))\b/gi,
+      " "
+    )
+    .replace(/[^\p{L}\p{N}\s\-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+
+const normalizeMediaGallerySpec = (
+  raw: Record<string, unknown>
+): MediaGalleryExplorerSpec | null => {
+  const queryRaw =
+    typeof raw.query === "string"
+      ? raw.query
+      : typeof raw.search === "string"
+        ? raw.search
+        : typeof raw.topic === "string"
+          ? raw.topic
+          : "";
+  const plainQuery = queryRaw.trim().slice(0, 120);
+  const cleanedQuery = sanitizeMediaSearchQuery(plainQuery);
+  const query = cleanedQuery || plainQuery;
+  if (!query) return null;
+
+  const parsedLimit = toFiniteNumber(raw.limit ?? raw.count ?? raw.size);
+  const limit = parsedLimit === null ? 6 : Math.round(clamp(parsedLimit, 3, 12));
+
+  return {
+    type: "media_gallery_explorer",
+    title: sanitizeTitle(raw.title, "Медиа-галерея по теме"),
+    subject: normalizeSubject(raw.subject ?? raw.discipline),
+    query,
+    mediaType: normalizeMediaType(raw.mediaType ?? raw.kind ?? raw.mode) ?? "image",
+    limit,
+  };
+};
+
+const inferMediaGallerySpec = (source: string): MediaGalleryExplorerSpec | null => {
+  const normalized = source.replace(/\s+/g, " ").trim();
+  const hasMediaIntent =
+    MEDIA_REQUEST_RE.test(normalized) ||
+    /(изображ|картин|фото|видео|video|image|gallery|галере)/i.test(normalized);
+  if (!hasMediaIntent) return null;
+
+  const mediaType: "image" | "video" = /(видео|video)/i.test(normalized)
+    ? "video"
+    : "image";
+
+  const query = sanitizeMediaSearchQuery(normalized);
+
+  if (!query) return null;
+
+  const subject = normalizeSubject(
+    /(биолог|анатом|клетк|organ|body|анатомичес)/i.test(normalized)
+      ? "biology"
+      : undefined
+  );
+
+  return {
+    type: "media_gallery_explorer",
+    title: "Медиа-галерея по теме",
+    subject,
+    query,
+    mediaType,
+    limit: 6,
+  };
+};
+
+const extractQuotedTitle = (source: string) => {
+  const quoted =
+    source.match(/[«"]([^"»]{2,120})[»"]/i)?.[1]?.trim() ??
+    source.match(/'([^']{2,120})'/i)?.[1]?.trim();
+  if (quoted) return quoted;
+
+  const byContext = source.match(
+    /(?:книг[аи]|роман[ае]|произведени[ея])\s+([A-ZА-ЯЁ][A-Za-zА-Яа-яЁё0-9\s\-]{2,120})/i
+  )?.[1];
+  return byContext?.trim() ?? "";
+};
+
+const buildLiteratureTimeline = (title: string): TimelineExplorerSpec => {
+  if (/война\s*и\s*мир/i.test(title)) {
+    return {
+      type: "timeline_explorer",
+      title: `Этапы "${title}"`,
+      subject: "literature",
+      initialStepId: "s1",
+      steps: [
+        {
+          id: "s1",
+          title: "Экспозиция и знакомство с героями",
+          details:
+            "Показаны семьи Болконских, Ростовых и Безуховых, формируется социальный фон и ценностные ориентиры героев.",
+          keyPoints: [
+            "Светское общество Петербурга и Москвы",
+            "Знакомство с Андреем, Пьером и Наташей",
+            "Намечаются внутренние конфликты персонажей",
+          ],
+          outcomes: ["Задаётся масштаб романа и круг главных героев"],
+          terms: ["экспозиция", "сюжетная линия", "характер"],
+          checkQuestion: "Какую роль играет светское общество в начале романа?",
+          checkAnswer:
+            "Оно задаёт социальный контекст и показывает ценностные противоречия героев.",
+        },
+        {
+          id: "s2",
+          title: "Война и исторические потрясения",
+          details:
+            "Сюжетные линии героев переплетаются с военными событиями 1805-1812 годов и историческими испытаниями страны.",
+          keyPoints: [
+            "Военные эпизоды меняют судьбы героев",
+            "Показана связь частной жизни и истории",
+            "Подчёркивается цена войны",
+          ],
+          outcomes: ["Личные конфликты обостряются на фоне истории"],
+          terms: ["исторический роман", "патриотизм", "эпопея"],
+          checkQuestion: "Почему военные события важны для личных линий героев?",
+          checkAnswer:
+            "Они становятся точкой внутреннего перелома и переоценки жизненных ценностей.",
+        },
+        {
+          id: "s3",
+          title: "Внутренние переломы и переосмысление",
+          details:
+            "Герои проходят этап личных кризисов, разочарований и духовного поиска, что меняет их взгляды на жизнь.",
+          keyPoints: [
+            "Пьер ищет смысл жизни",
+            "Андрей переживает разочарование и обновление",
+            "Наташа взрослеет через ошибки и испытания",
+          ],
+          outcomes: ["Герои приходят к более зрелому пониманию себя"],
+          terms: ["внутренний конфликт", "духовный поиск", "нравственный выбор"],
+          checkQuestion: "Что объединяет личные пути Пьера, Андрея и Наташи?",
+          checkAnswer:
+            "Каждый проходит через кризис и приходит к переосмыслению ценностей.",
+        },
+        {
+          id: "s4",
+          title: "Развязка и авторская идея",
+          details:
+            "Финальные события подводят к мысли о ценности семьи, мира и нравственной ответственности человека.",
+          keyPoints: [
+            "Итоги сюжетных линий героев",
+            "Смысл истории раскрывается через судьбы людей",
+            "Утверждается ценность мирной жизни",
+          ],
+          outcomes: ["Формируется целостная философская идея романа"],
+          terms: ["развязка", "эпилог", "авторская позиция"],
+          checkQuestion: "Какая ключевая идея романа проявляется в финале?",
+          checkAnswer:
+            "Мысль о приоритете нравственных ценностей, семьи и мирной человеческой жизни.",
+        },
+      ],
+    };
+  }
+
+  return {
+    type: "timeline_explorer",
+    title: `Этапы "${title}"`,
+    subject: "literature",
+    initialStepId: "s1",
+    steps: [
+      {
+        id: "s1",
+        title: "Экспозиция",
+        details: `В произведении "${title}" задаются место действия, время и ключевые герои.`,
+        keyPoints: [
+          "Вводятся персонажи",
+          "Обозначается исходная ситуация",
+          "Формируется общий тон произведения",
+        ],
+        outcomes: ["Читатель получает базовый контекст для дальнейших событий"],
+      },
+      {
+        id: "s2",
+        title: "Завязка конфликта",
+        details:
+          "Появляется главный конфликт, который запускает развитие сюжетных линий.",
+        keyPoints: [
+          "Герои сталкиваются с противоречием",
+          "Определяются цели и препятствия",
+          "Напряжение постепенно нарастает",
+        ],
+        outcomes: ["Сюжет получает направление и динамику"],
+      },
+      {
+        id: "s3",
+        title: "Кульминация",
+        details:
+          "События достигают максимальной напряжённости, герои делают ключевой выбор.",
+        keyPoints: [
+          "Резкое обострение конфликта",
+          "Определяющие решения героев",
+          "Переломный момент сюжета",
+        ],
+        outcomes: ["Определяется дальнейший исход произведения"],
+      },
+      {
+        id: "s4",
+        title: "Развязка и смысл",
+        details:
+          "Конфликт получает итог, раскрывается основная авторская идея произведения.",
+        keyPoints: [
+          "Финальные последствия для героев",
+          "Закрытие сюжетных линий",
+          "Формулируется главный смысл",
+        ],
+        outcomes: ["Читатель получает целостное понимание произведения"],
+      },
+    ],
+  };
+};
+
+const inferTimelineSpec = (source: string): TimelineExplorerSpec | null => {
+  const normalized = source.replace(/\n+/g, " ").trim();
+  if (!TIMELINE_REQUEST_RE.test(normalized)) return null;
+
+  const isLiterature = LITERATURE_CONTEXT_RE.test(normalized);
+  const title = extractQuotedTitle(normalized) || "произведения";
+
+  if (isLiterature) {
+    return buildLiteratureTimeline(title);
+  }
+
+  return {
+    type: "timeline_explorer",
+    title: "Интерактивный таймлайн по теме",
+    subject: normalizeSubject(normalized),
+    initialStepId: "s1",
+    steps: [
+      {
+        id: "s1",
+        title: "Введение в тему",
+        details: "Определяются ключевые понятия и исходный контекст.",
+      },
+      {
+        id: "s2",
+        title: "Основные этапы",
+        details: "Показываются ключевые события или стадии развития темы.",
+      },
+      {
+        id: "s3",
+        title: "Ключевой поворот",
+        details: "Разбирается главный переломный момент или центральный вывод.",
+      },
+      {
+        id: "s4",
+        title: "Итог",
+        details: "Формулируются основные результаты и смысловые выводы.",
+      },
+    ],
+  };
+};
+
 const normalizeSingleInteractiveRaw = (
   raw: Record<string, unknown>
 ): SingleInteractiveSpec | null => {
+  if (raw.type === "timeline_explorer") {
+    return normalizeTimelineSpec(raw);
+  }
+
+  if (raw.type === "media_gallery_explorer") {
+    return normalizeMediaGallerySpec(raw);
+  }
+
   if (raw.type === "linear_explorer") {
     return normalizeLinearSpec(raw);
   }
@@ -214,7 +666,24 @@ const normalizeSingleInteractiveRaw = (
     return normalizeTrigSpec(raw);
   }
 
-  return normalizeTrigSpec(raw) ?? normalizeQuadraticSpec(raw) ?? normalizeLinearSpec(raw);
+  return (
+    normalizeTimelineSpec(raw) ??
+    normalizeMediaGallerySpec(raw) ??
+    normalizeTrigSpec(raw) ??
+    normalizeQuadraticSpec(raw) ??
+    normalizeLinearSpec(raw)
+  );
+};
+
+const normalizeChartInteractiveRaw = (
+  raw: Record<string, unknown>
+): ChartInteractiveSpec | null => {
+  const spec = normalizeSingleInteractiveRaw(raw);
+  if (!spec) return null;
+  if (spec.type === "quadratic_explorer") return spec;
+  if (spec.type === "linear_explorer") return spec;
+  if (spec.type === "trig_explorer") return spec;
+  return null;
 };
 
 const sanitizeSeriesColor = (value: unknown) => {
@@ -237,7 +706,7 @@ const normalizeComparisonSeries = (
       ? raw.function
       : raw;
 
-  const spec = normalizeSingleInteractiveRaw(innerRaw);
+  const spec = normalizeChartInteractiveRaw(innerRaw);
   if (!spec) return null;
 
   const id =
@@ -410,7 +879,7 @@ const normalizeEquation = (raw: string) =>
     .replace(/²/g, "^2")
     .replace(/,/g, ".");
 
-const inferPolynomialSpec = (source: string): SingleInteractiveSpec | null => {
+const inferPolynomialSpec = (source: string): ChartInteractiveSpec | null => {
   const matches = extractEquationMatches(source);
   if (!matches?.length) return null;
 
@@ -502,12 +971,12 @@ const inferTrigSpec = (source: string): TrigExplorerSpec | null => {
   return null;
 };
 
-const inferSingleSpec = (source: string): SingleInteractiveSpec | null =>
+const inferSingleSpec = (source: string): ChartInteractiveSpec | null =>
   inferTrigSpec(source) ?? inferPolynomialSpec(source);
 
 const buildComparisonSpec = (
-  first: SingleInteractiveSpec,
-  second: SingleInteractiveSpec
+  first: ChartInteractiveSpec,
+  second: ChartInteractiveSpec
 ): ComparisonExplorerSpec => ({
   type: "comparison_explorer",
   title: "Сравнение двух функций",
@@ -539,7 +1008,7 @@ const inferComparisonSpec = (source: string): ComparisonExplorerSpec | null => {
   if (!hasCompareIntent) return null;
 
   if (equationMatches.length >= 2) {
-    const uniqueSpecs: SingleInteractiveSpec[] = [];
+    const uniqueSpecs: ChartInteractiveSpec[] = [];
 
     for (const equation of equationMatches) {
       const parsed = inferSingleSpec(equation);
@@ -614,11 +1083,14 @@ const stripInteractiveArtifacts = (text: string) => {
 const shouldRenderInteractive = (userInput?: string) => {
   if (!userInput?.trim()) return true;
   const source = userInput.trim();
-  const isVisualRequest = VIS_REQUEST_RE.test(source);
+  const isVisualRequest =
+    VIS_REQUEST_RE.test(source) ||
+    MEDIA_REQUEST_RE.test(source) ||
+    NON_MATH_VIS_CONTEXT_RE.test(source);
   if (!isVisualRequest) return true;
 
   const hasUnsupported = UNSUPPORTED_VIS_RE.test(source);
-  const hasSupported = SUPPORTED_GRAPH_KIND_RE.test(source);
+  const hasSupported = SUPPORTED_VIS_KIND_RE.test(source);
   return hasSupported && !hasUnsupported;
 };
 
@@ -626,9 +1098,9 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
   if (!shouldRenderInteractive(userInput)) {
     const baseText = stripInteractiveArtifacts(text);
     const guardrail =
-      "Я могу построить для тебя интерактивные графики следующих функций: линейных, квадратичных и тригонометрических (sin, cos, tan). Просто напиши, какую именно функцию нужно показать.";
+      "Я могу показать интерактивные материалы: графики функций (линейные, квадратичные, тригонометрические), сравнение двух функций, таймлайны по теме и медиа-галерею (фото/видео из открытых источников).";
     if (!baseText) return guardrail;
-    if (baseText.includes("интерактивные графики следующих функций: линейных, квадратичных и тригонометрических")) {
+    if (baseText.includes("Я могу показать интерактивные материалы:")) {
       return baseText;
     }
     return `${baseText}\n\n${guardrail}`;
@@ -637,6 +1109,9 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
   const source = `${text}\n${userInput ?? ""}`;
   const graphContext =
     GRAPH_CONTEXT_RE.test(source) || TRIG_CONTEXT_RE.test(source);
+  const mediaContext =
+    MEDIA_REQUEST_RE.test(source) ||
+    NON_MATH_VIS_CONTEXT_RE.test(source);
 
   const interactiveSpec = parseInteractiveBlock(text);
   if (interactiveSpec) {
@@ -656,6 +1131,31 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
         : text;
       const baseText = stripNonGraphArtifacts(preparedText);
       const blocks = [buildInteractiveBlock(inferredFunction)];
+      return baseText ? `${baseText}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
+    }
+  }
+
+  const timelineSpec = inferTimelineSpec(userInput ?? source);
+  if (timelineSpec) {
+    const looseSpec = parseLooseInteractiveJson(text);
+    const preparedText = looseSpec
+      ? removeSlice(text, looseSpec.start, looseSpec.end)
+      : text;
+    const baseText = stripNonGraphArtifacts(preparedText);
+    const blocks = [buildInteractiveBlock(timelineSpec)];
+    return baseText ? `${baseText}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
+  }
+
+  if (mediaContext) {
+    const mediaSpec = inferMediaGallerySpec(userInput ?? source);
+    if (mediaSpec) {
+      const looseSpec = parseLooseInteractiveJson(text);
+      const preparedText = looseSpec
+        ? removeSlice(text, looseSpec.start, looseSpec.end)
+        : text;
+      const baseTextRaw = stripNonGraphArtifacts(preparedText);
+      const baseText = CANT_SHOW_MEDIA_RE.test(baseTextRaw) ? "" : baseTextRaw;
+      const blocks = [buildInteractiveBlock(mediaSpec)];
       return baseText ? `${baseText}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
     }
   }

@@ -52,16 +52,53 @@ export type TrigExplorerSpec = {
   };
 };
 
-export type SingleInteractiveSpec =
+export type TimelineExplorerStep = {
+  id: string;
+  title: string;
+  details?: string;
+  period?: string;
+  imageQuery?: string;
+  imageCaption?: string;
+  keyPoints?: string[];
+  outcomes?: string[];
+  terms?: string[];
+  commonMistake?: string;
+  checkQuestion?: string;
+  checkAnswer?: string;
+};
+
+export type TimelineExplorerSpec = {
+  type: "timeline_explorer";
+  title?: string;
+  subject?: "biology" | "literature" | "history" | "general";
+  steps: TimelineExplorerStep[];
+  initialStepId?: string;
+};
+
+export type MediaGalleryExplorerSpec = {
+  type: "media_gallery_explorer";
+  title?: string;
+  subject?: "biology" | "literature" | "history" | "general";
+  query: string;
+  mediaType?: "image" | "video";
+  limit?: number;
+};
+
+export type ChartInteractiveSpec =
   | QuadraticExplorerSpec
   | LinearExplorerSpec
   | TrigExplorerSpec;
+
+export type SingleInteractiveSpec =
+  | ChartInteractiveSpec
+  | TimelineExplorerSpec
+  | MediaGalleryExplorerSpec;
 
 export type ComparisonExplorerSeries = {
   id: string;
   label?: string;
   color?: string;
-  spec: SingleInteractiveSpec;
+  spec: ChartInteractiveSpec;
 };
 
 export type ComparisonExplorerSpec = {
