@@ -1,7 +1,10 @@
 import {
+  ComparisonExplorerSeries,
+  ComparisonExplorerSpec,
   InteractiveRange,
   InteractiveSpec,
-  QuadraticExplorerSpec,
+  LinearExplorerSpec,
+  SingleInteractiveSpec,
   TrigExplorerSpec,
   TrigFunction,
 } from "./types";
@@ -17,6 +20,8 @@ const GRAPH_CONTEXT_RE =
   /(график|диаграм|функц|уравнен|парабол|линейн|plot|graph|equation|function|chart|quadratic|linear)/i;
 const TRIG_CONTEXT_RE =
   /(тригоном|sin|cos|tan|sine|cosine|tangent|синус|косинус|тангенс)/i;
+const COMPARE_CONTEXT_RE =
+  /(сравн|сопостав|налож|на одном|вместе|одновременно|compare|comparison|overlay|superimpos|both|vs)/i;
 const SUPPORTED_GRAPH_KIND_RE =
   /(y\s*=|парабол|линейн|квадрат|тригоном|sin|cos|tan|linear|quadratic|trig|function|функц)/i;
 const UNSUPPORTED_VIS_RE =
@@ -28,7 +33,6 @@ const DEFAULT_RANGES: Record<"a" | "b" | "c", InteractiveRange> = {
   b: { min: -10, max: 10, step: 0.1 },
   c: { min: -10, max: 10, step: 0.1 },
 };
-const LOCKED_A_RANGE: InteractiveRange = { min: 0, max: 0, step: 1 };
 const DEFAULT_TRIG_RANGES: Record<
   "amplitude" | "frequency" | "phase" | "offset",
   InteractiveRange
@@ -85,9 +89,41 @@ const parseRange = (raw: unknown, fallback: InteractiveRange): InteractiveRange 
 const toCodeBlock = (lang: string, payload: Record<string, unknown>) =>
   `\`\`\`${lang}\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
 
+const sanitizeTitle = (value: unknown, fallback: string) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 120)
+    : fallback;
+
+const normalizeLinearSpec = (
+  raw: Record<string, unknown>
+): LinearExplorerSpec | null => {
+  const params = isRecord(raw.params) ? raw.params : raw;
+  const slope = toFiniteNumber(params.slope ?? params.m ?? params.b);
+  const intercept = toFiniteNumber(params.intercept ?? params.k ?? params.c);
+  if (slope === null || intercept === null) return null;
+
+  const ranges = isRecord(raw.ranges) ? raw.ranges : {};
+
+  return {
+    type: "linear_explorer",
+    title: sanitizeTitle(raw.title, "Интерактивная линейная функция"),
+    params: {
+      slope: round(clamp(slope, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
+      intercept: round(clamp(intercept, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
+    },
+    ranges: {
+      slope: parseRange(ranges.slope ?? ranges.m ?? ranges.b, DEFAULT_RANGES.b),
+      intercept: parseRange(
+        ranges.intercept ?? ranges.k ?? ranges.c,
+        DEFAULT_RANGES.c
+      ),
+    },
+  };
+};
+
 const normalizeQuadraticSpec = (
   raw: Record<string, unknown>
-): QuadraticExplorerSpec | null => {
+): SingleInteractiveSpec | null => {
   const params = isRecord(raw.params) ? raw.params : raw;
   const a = toFiniteNumber(params.a);
   const b = toFiniteNumber(params.b);
@@ -96,17 +132,24 @@ const normalizeQuadraticSpec = (
 
   const ranges = isRecord(raw.ranges) ? raw.ranges : {};
   const normalizedA = round(clamp(a, -MAX_ABS_COEFF, MAX_ABS_COEFF));
-  const defaultTitle =
-    normalizedA === 0
-      ? "Интерактивная линейная функция"
-      : "Интерактивная квадратичная функция";
+  if (Math.abs(normalizedA) < 1e-9) {
+    return normalizeLinearSpec({
+      ...raw,
+      params: {
+        slope: b,
+        intercept: c,
+      },
+      ranges: {
+        ...(isRecord(raw.ranges) ? raw.ranges : {}),
+        slope: isRecord(raw.ranges) ? raw.ranges.b : undefined,
+        intercept: isRecord(raw.ranges) ? raw.ranges.c : undefined,
+      },
+    });
+  }
 
   return {
     type: "quadratic_explorer",
-    title:
-      typeof raw.title === "string" && raw.title.trim()
-        ? raw.title.trim().slice(0, 120)
-        : defaultTitle,
+    title: sanitizeTitle(raw.title, "Интерактивная квадратичная функция"),
     params: {
       a: normalizedA,
       b: round(clamp(b, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
@@ -116,39 +159,6 @@ const normalizeQuadraticSpec = (
       a: parseRange(ranges.a, DEFAULT_RANGES.a),
       b: parseRange(ranges.b, DEFAULT_RANGES.b),
       c: parseRange(ranges.c, DEFAULT_RANGES.c),
-    },
-  };
-};
-
-const normalizeLinearSpec = (
-  raw: Record<string, unknown>
-): QuadraticExplorerSpec | null => {
-  const params = isRecord(raw.params) ? raw.params : raw;
-  const slope = toFiniteNumber(
-    params.slope ?? params.m ?? params.b
-  );
-  const intercept = toFiniteNumber(
-    params.intercept ?? params.k ?? params.c
-  );
-  if (slope === null || intercept === null) return null;
-
-  const ranges = isRecord(raw.ranges) ? raw.ranges : {};
-
-  return {
-    type: "quadratic_explorer",
-    title:
-      typeof raw.title === "string" && raw.title.trim()
-        ? raw.title.trim().slice(0, 120)
-        : "Интерактивная линейная функция",
-    params: {
-      a: 0,
-      b: round(clamp(slope, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
-      c: round(clamp(intercept, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
-    },
-    ranges: {
-      a: LOCKED_A_RANGE,
-      b: parseRange(ranges.slope ?? ranges.m ?? ranges.b, DEFAULT_RANGES.b),
-      c: parseRange(ranges.intercept ?? ranges.k ?? ranges.c, DEFAULT_RANGES.c),
     },
   };
 };
@@ -172,10 +182,7 @@ const normalizeTrigSpec = (raw: Record<string, unknown>): TrigExplorerSpec | nul
 
   return {
     type: "trig_explorer",
-    title:
-      typeof raw.title === "string" && raw.title.trim()
-        ? raw.title.trim().slice(0, 120)
-        : "Интерактивная тригонометрическая функция",
+    title: sanitizeTitle(raw.title, "Интерактивная тригонометрическая функция"),
     function: fn,
     params: {
       amplitude: round(clamp(amplitude, -MAX_ABS_COEFF, MAX_ABS_COEFF)),
@@ -192,7 +199,9 @@ const normalizeTrigSpec = (raw: Record<string, unknown>): TrigExplorerSpec | nul
   };
 };
 
-const parseInteractiveRaw = (raw: Record<string, unknown>): InteractiveSpec | null => {
+const normalizeSingleInteractiveRaw = (
+  raw: Record<string, unknown>
+): SingleInteractiveSpec | null => {
   if (raw.type === "linear_explorer") {
     return normalizeLinearSpec(raw);
   }
@@ -206,6 +215,97 @@ const parseInteractiveRaw = (raw: Record<string, unknown>): InteractiveSpec | nu
   }
 
   return normalizeTrigSpec(raw) ?? normalizeQuadraticSpec(raw) ?? normalizeLinearSpec(raw);
+};
+
+const sanitizeSeriesColor = (value: unknown) => {
+  if (typeof value !== "string") return undefined;
+  const color = value.trim();
+  if (!color) return undefined;
+  if (color.length > 40) return undefined;
+  return color;
+};
+
+const normalizeComparisonSeries = (
+  raw: unknown,
+  index: number
+): ComparisonExplorerSeries | null => {
+  if (!isRecord(raw)) return null;
+
+  const innerRaw = isRecord(raw.spec)
+    ? raw.spec
+    : isRecord(raw.function)
+      ? raw.function
+      : raw;
+
+  const spec = normalizeSingleInteractiveRaw(innerRaw);
+  if (!spec) return null;
+
+  const id =
+    typeof raw.id === "string" && raw.id.trim()
+      ? raw.id.trim().slice(0, 40)
+      : `f${index + 1}`;
+  const label =
+    typeof raw.label === "string" && raw.label.trim()
+      ? raw.label.trim().slice(0, 120)
+      : spec.title;
+
+  return {
+    id,
+    label,
+    color: sanitizeSeriesColor(raw.color),
+    spec,
+  };
+};
+
+const normalizeComparisonSpec = (
+  raw: Record<string, unknown>
+): ComparisonExplorerSpec | null => {
+  const sourceSeries = Array.isArray(raw.series)
+    ? raw.series
+    : Array.isArray(raw.functions)
+      ? raw.functions
+      : null;
+  if (!sourceSeries || sourceSeries.length < 2) return null;
+
+  const first = normalizeComparisonSeries(sourceSeries[0], 0);
+  const second = normalizeComparisonSeries(sourceSeries[1], 1);
+  if (!first || !second) return null;
+
+  return {
+    type: "comparison_explorer",
+    title: sanitizeTitle(raw.title, "Сравнение двух функций"),
+    mode: "overlay",
+    series: [first, second],
+  };
+};
+
+const parseInteractiveRaw = (raw: Record<string, unknown>): InteractiveSpec | null => {
+  if (raw.type === "comparison_explorer") {
+    return normalizeComparisonSpec(raw);
+  }
+
+  if (Array.isArray(raw.series) || Array.isArray(raw.functions)) {
+    const comparison = normalizeComparisonSpec(raw);
+    if (comparison) return comparison;
+  }
+
+  return normalizeSingleInteractiveRaw(raw);
+};
+
+const extractEquationMatches = (source: string) => {
+  const matches = Array.from(
+    source.matchAll(/y\s*=\s*([^;,\n]+?)(?=(?:\s+y\s*=)|[;,\n]|$)/gi)
+  );
+
+  return matches
+    .map((match) => {
+      const rhs = match[1]
+        ?.replace(/\s+(и|and|vs)\s*$/i, "")
+        .trim();
+      if (!rhs) return null;
+      return `y=${rhs}`;
+    })
+    .filter((value): value is string => Boolean(value));
 };
 
 const parseInteractiveBlock = (text: string): InteractiveSpec | null => {
@@ -310,8 +410,8 @@ const normalizeEquation = (raw: string) =>
     .replace(/²/g, "^2")
     .replace(/,/g, ".");
 
-const inferQuadraticSpec = (source: string): QuadraticExplorerSpec | null => {
-  const matches = source.match(/y\s*=\s*[^\n,;]+/gi);
+const inferPolynomialSpec = (source: string): SingleInteractiveSpec | null => {
+  const matches = extractEquationMatches(source);
   if (!matches?.length) return null;
 
   for (const match of matches) {
@@ -337,9 +437,9 @@ const inferQuadraticSpec = (source: string): QuadraticExplorerSpec | null => {
       const c = parseCoeff(linear[2], 0);
       if (![b, c].every(Number.isFinite)) continue;
 
-      return normalizeQuadraticSpec({
-        type: "quadratic_explorer",
-        params: { a: 0, b, c },
+      return normalizeLinearSpec({
+        type: "linear_explorer",
+        params: { slope: b, intercept: c },
       });
     }
 
@@ -348,9 +448,9 @@ const inferQuadraticSpec = (source: string): QuadraticExplorerSpec | null => {
       const c = parseCoeff(constant[1], 0);
       if (!Number.isFinite(c)) continue;
 
-      return normalizeQuadraticSpec({
-        type: "quadratic_explorer",
-        params: { a: 0, b: 0, c },
+      return normalizeLinearSpec({
+        type: "linear_explorer",
+        params: { slope: 0, intercept: c },
       });
     }
   }
@@ -359,7 +459,7 @@ const inferQuadraticSpec = (source: string): QuadraticExplorerSpec | null => {
 };
 
 const inferTrigSpec = (source: string): TrigExplorerSpec | null => {
-  const matches = source.match(/y\s*=\s*[^\n,;]+/gi);
+  const matches = extractEquationMatches(source);
   if (!matches?.length) return null;
 
   for (const match of matches) {
@@ -400,6 +500,89 @@ const inferTrigSpec = (source: string): TrigExplorerSpec | null => {
   }
 
   return null;
+};
+
+const inferSingleSpec = (source: string): SingleInteractiveSpec | null =>
+  inferTrigSpec(source) ?? inferPolynomialSpec(source);
+
+const buildComparisonSpec = (
+  first: SingleInteractiveSpec,
+  second: SingleInteractiveSpec
+): ComparisonExplorerSpec => ({
+  type: "comparison_explorer",
+  title: "Сравнение двух функций",
+  mode: "overlay",
+  series: [
+    {
+      id: "f1",
+      label: first.title,
+      color: "#1d4ed8",
+      spec: first,
+    },
+    {
+      id: "f2",
+      label: second.title,
+      color: "#dc2626",
+      spec: second,
+    },
+  ],
+});
+
+const inferComparisonSpec = (source: string): ComparisonExplorerSpec | null => {
+  const equationMatches = extractEquationMatches(source);
+  const normalizedSource = source.replace(/\n+/g, " ");
+  const hasCompareIntent =
+    COMPARE_CONTEXT_RE.test(normalizedSource) ||
+    /(?:sin|sine|cos|cosine|tan|tangent|tg|синус|косинус|тангенс).*(?:\band\b|\bи\b).*(?:sin|sine|cos|cosine|tan|tangent|tg|синус|косинус|тангенс)/i.test(
+      normalizedSource
+    );
+  if (!hasCompareIntent) return null;
+
+  if (equationMatches.length >= 2) {
+    const uniqueSpecs: SingleInteractiveSpec[] = [];
+
+    for (const equation of equationMatches) {
+      const parsed = inferSingleSpec(equation);
+      if (!parsed) continue;
+
+      const fingerprint = JSON.stringify(parsed);
+      const exists = uniqueSpecs.some(
+        (spec) => JSON.stringify(spec) === fingerprint
+      );
+      if (!exists) uniqueSpecs.push(parsed);
+      if (uniqueSpecs.length === 2) break;
+    }
+
+    if (uniqueSpecs.length >= 2) {
+      const [first, second] = uniqueSpecs;
+      return buildComparisonSpec(first, second);
+    }
+  }
+
+  const trigMentions = Array.from(
+    normalizedSource.matchAll(
+      /\b(sin|sine|cos|cosine|tan|tangent|tg|синус|косинус|тангенс)\b/gi
+    )
+  )
+    .map((match) => normalizeTrigFunction(match[1]))
+    .filter((value): value is TrigFunction => Boolean(value));
+
+  const uniqueTrig = Array.from(new Set(trigMentions));
+  if (uniqueTrig.length < 2) return null;
+
+  const first = normalizeTrigSpec({
+    type: "trig_explorer",
+    function: uniqueTrig[0],
+    params: { amplitude: 1, frequency: 1, phase: 0, offset: 0 },
+  });
+  const second = normalizeTrigSpec({
+    type: "trig_explorer",
+    function: uniqueTrig[1],
+    params: { amplitude: 1, frequency: 1, phase: 0, offset: 0 },
+  });
+  if (!first || !second) return null;
+
+  return buildComparisonSpec(first, second);
 };
 
 const buildInteractiveBlock = (spec: InteractiveSpec) =>
@@ -465,7 +648,7 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
   }
 
   if (graphContext) {
-    const inferredFunction = inferTrigSpec(source) ?? inferQuadraticSpec(source);
+    const inferredFunction = inferComparisonSpec(source) ?? inferSingleSpec(source);
     if (inferredFunction) {
       const looseSpec = parseLooseInteractiveJson(text);
       const preparedText = looseSpec

@@ -19,6 +19,19 @@ export type QuadraticExplorerSpec = {
   };
 };
 
+export type LinearExplorerSpec = {
+  type: "linear_explorer";
+  title?: string;
+  params: {
+    slope: number;
+    intercept: number;
+  };
+  ranges: {
+    slope: InteractiveRange;
+    intercept: InteractiveRange;
+  };
+};
+
 export type TrigFunction = "sin" | "cos" | "tan";
 
 export type TrigExplorerSpec = {
@@ -39,6 +52,25 @@ export type TrigExplorerSpec = {
   };
 };
 
-export type InteractiveSpec =
+export type SingleInteractiveSpec =
   | QuadraticExplorerSpec
+  | LinearExplorerSpec
   | TrigExplorerSpec;
+
+export type ComparisonExplorerSeries = {
+  id: string;
+  label?: string;
+  color?: string;
+  spec: SingleInteractiveSpec;
+};
+
+export type ComparisonExplorerSpec = {
+  type: "comparison_explorer";
+  title?: string;
+  mode: "overlay";
+  series: [ComparisonExplorerSeries, ComparisonExplorerSeries];
+};
+
+export type InteractiveSpec =
+  | SingleInteractiveSpec
+  | ComparisonExplorerSpec;
