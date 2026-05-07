@@ -23,6 +23,8 @@ export const buildLessonPrompt = (topic: {
   };
 }) => {
   const subtopics = normalizeSubtopics(topic.subtopics);
+  const goalDescription =
+    topic.goal.description?.trim() || `изучать дисциплину: ${topic.goal.title}`;
   const subtopicsLine =
     subtopics.length > 0
       ? `Подтемы: ${subtopics.join(", ")}.`
@@ -30,7 +32,7 @@ export const buildLessonPrompt = (topic: {
 
   return [
     `### Наставник по дисциплине: ${topic.goal.title}`,
-    `**Цель:** ${topic.goal.description || "не указана"}`,
+    `**Цель:** ${goalDescription}`,
     topic.goal.currentLevel
       ? `**Текущий уровень:** ${topic.goal.currentLevel}`
       : null,

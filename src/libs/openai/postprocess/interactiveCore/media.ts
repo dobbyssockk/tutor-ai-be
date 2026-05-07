@@ -3,6 +3,51 @@ import { MEDIA_REQUEST_RE } from "./constants";
 import { clamp, sanitizeTitle, toFiniteNumber } from "./shared";
 import { normalizeSubject } from "./timeline";
 
+const MEDIA_QUERY_STOP_WORDS = new Set([
+  "about",
+  "display",
+  "find",
+  "for",
+  "gallery",
+  "give",
+  "image",
+  "images",
+  "photo",
+  "photos",
+  "please",
+  "show",
+  "video",
+  "videos",
+  "галерею",
+  "галереи",
+  "галерея",
+  "изображение",
+  "изображения",
+  "картинка",
+  "картинки",
+  "картинку",
+  "медиа",
+  "мне",
+  "найди",
+  "о",
+  "об",
+  "открытых",
+  "пж",
+  "пожалуйста",
+  "покажи",
+  "показ",
+  "показать",
+  "подбери",
+  "по",
+  "про",
+  "тема",
+  "теме",
+  "фото",
+  "фотографии",
+  "фотографию",
+  "видео",
+]);
+
 const normalizeMediaType = (
   value: unknown
 ): MediaGalleryExplorerSpec["mediaType"] => {
@@ -17,11 +62,14 @@ const normalizeMediaType = (
 
 export const sanitizeMediaSearchQuery = (value: string) =>
   value
-    .replace(
-      /\b(пожалуйста|пж|please|покажи|показать|показ|найди|подбери|show|display|find|give|мне|по|теме|тема|про|about|for|изображени[ея]?|изображение|картин(?:ка|ки|ку|а)?|фото|видео|video|image|images|gallery|галере(?:я|ю|и))\b/gi,
-      " "
-    )
-    .replace(/[^\p{L}\p{N}\s\-]/gu, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => {
+      if (!token) return false;
+      return !MEDIA_QUERY_STOP_WORDS.has(token.toLowerCase());
+    })
+    .join(" ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120);
