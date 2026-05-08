@@ -53,8 +53,7 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
   const source = `${text}\n${userInput ?? ""}`;
   const graphContext =
     GRAPH_CONTEXT_RE.test(source) || TRIG_CONTEXT_RE.test(source);
-  const mediaContext =
-    MEDIA_REQUEST_RE.test(source) || NON_MATH_VIS_CONTEXT_RE.test(source);
+  const mediaContext = MEDIA_REQUEST_RE.test(userInput ?? source);
 
   const interactiveSpec = parseInteractiveBlock(text);
   if (interactiveSpec) {

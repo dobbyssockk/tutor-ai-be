@@ -49,7 +49,7 @@ router.get("/:chatId", async (req: JWTRequest, res) => {
     const userId = req.auth!.sub!;
     const chat = await prisma.chat.findFirst({
       where: { id, userId },
-      include: { messages: true },
+      include: { messages: { orderBy: { createdAt: "asc" } } },
     });
     if (!chat) {
       res.status(404).json({ error: "Chat not found" });

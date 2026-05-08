@@ -59,6 +59,6 @@ export const createChatWithPrompt = async (
         ],
       },
     },
-    include: { messages: true },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
   });
 };

@@ -107,10 +107,7 @@ export const inferMediaGallerySpec = (
   source: string
 ): MediaGalleryExplorerSpec | null => {
   const normalized = source.replace(/\s+/g, " ").trim();
-  const hasMediaIntent =
-    MEDIA_REQUEST_RE.test(normalized) ||
-    /(изображ|картин|фото|видео|video|image|gallery|галере)/i.test(normalized);
-  if (!hasMediaIntent) return null;
+  if (!MEDIA_REQUEST_RE.test(normalized)) return null;
 
   const mediaType: "image" | "video" = /(видео|video)/i.test(normalized)
     ? "video"
