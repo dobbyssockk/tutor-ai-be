@@ -75,6 +75,12 @@ export const withInteractiveMarkdown = (text: string, userInput?: string) => {
       const blocks = [buildInteractiveBlock(inferredFunction)];
       return baseText ? `${baseText}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
     }
+
+    const baseText = stripNonGraphArtifacts(text);
+    if (baseText.includes(INTERACTIVE_GUARDRAIL_TEXT)) {
+      return baseText;
+    }
+    return baseText ? `${baseText}\n\n${INTERACTIVE_GUARDRAIL_TEXT}` : INTERACTIVE_GUARDRAIL_TEXT;
   }
 
   const timelineSpec = inferTimelineSpec(userInput ?? source);
