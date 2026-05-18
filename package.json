@@ -1,9 +1,11 @@
 {
   "name": "tutor-ai-be",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "prisma generate && ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
     "prisma:generate": "prisma generate"
   },
   "keywords": [],

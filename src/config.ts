@@ -22,4 +22,10 @@ export const ASSESSMENT_QUESTION_COUNT =
   parsedAssessmentQuestionCount > 0
     ? parsedAssessmentQuestionCount
     : 12;
-export const PASSING_SCORE = 70;
+const parsedPassingScore = Number(process.env.PASSING_SCORE);
+export const PASSING_SCORE =
+  Number.isInteger(parsedPassingScore) && parsedPassingScore > 0
+    ? parsedPassingScore
+    : 70;
+
+export const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
