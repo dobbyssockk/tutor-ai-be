@@ -9,9 +9,9 @@ export const VIS_REQUEST_RE =
 export const MEDIA_REQUEST_RE =
   /(покажи|показать|показ|найди|подбери|show|display|find).*(изображ|картин|фото|video|видео|gallery|галере)|((изображ|картин|фото|video|видео|gallery|галере).*(покажи|показать|show|display))/i;
 export const GRAPH_CONTEXT_RE =
-  /(график|диаграм|функц|уравнен|парабол|линейн|plot|graph|equation|function|chart|quadratic|linear)/i;
+  /(график|диаграм|функц|уравнен|парабол|линейн|plot|graph|equation|\bfunction\b|chart|quadratic|linear)/i;
 export const TRIG_CONTEXT_RE =
-  /(тригоном|sin|cos|tan|sine|cosine|tangent|синус|косинус|тангенс)/i;
+  /(тригоном|\bsin\b|\bcos\b|\btan\b|\bsine\b|\bcosine\b|\btangent\b|синус|косинус|тангенс)/i;
 export const NON_MATH_VIS_CONTEXT_RE =
   /(биолог|литератур|истор|таймлайн|timeline|этап|стад|процесс|цикл|фото|изображ|картин|иллюстрац|галере|media|image|video|видео)/i;
 export const COMPARE_CONTEXT_RE =
@@ -21,7 +21,7 @@ export const TIMELINE_REQUEST_RE =
 export const LITERATURE_CONTEXT_RE =
   /(литератур|книг|роман|повест|рассказ|поэм|произведен|сюжет|персонаж|геро|автор)/i;
 export const SUPPORTED_GRAPH_KIND_RE =
-  /(y\s*=|парабол|линейн|квадрат|тригоном|sin|cos|tan|linear|quadratic|trig|function|функц)/i;
+  /(y\s*=|парабол|линейн|квадрат|тригоном|\bsin\b|\bcos\b|\btan\b|linear|quadratic|trig|\bfunction\b|функц)/i;
 export const SUPPORTED_VIS_KIND_RE = new RegExp(
   `${SUPPORTED_GRAPH_KIND_RE.source}|${NON_MATH_VIS_CONTEXT_RE.source}`,
   "i"

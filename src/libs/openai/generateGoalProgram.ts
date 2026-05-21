@@ -33,6 +33,7 @@ export const generateGoalProgram = async ({
     notes ? `Additional context: ${notes}.` : "Additional context: none.",
     "If this discipline/class exists on Yaklass, mirror Yaklass section titles 1:1 and keep the same structure.",
     "Return a structured program with topics, subtopics, and duration in weeks.",
+    "Each topic's durationWeeks is nominal workload measured as that many calendar weeks at 45 minutes of study per day; the app scales real deadlines using the learner's actual minutes per day.",
     "Keep durations realistic for the available time.",
     "Return JSON only with this shape:",
     '{ "topics": [ { "title": "...", "summary": "...", "durationWeeks": 2, "subtopics": ["..."] } ] }',

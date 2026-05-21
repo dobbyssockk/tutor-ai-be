@@ -9,10 +9,34 @@ export type ProgramTopicInput = {
   durationWeeks: number;
 };
 
-export const addWeeks = (date: Date, weeks: number) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + weeks * 7);
-  return next;
+/** Nominal daily effort that stored `durationWeeks` is calibrated to (see `computeTopicDueAt`). */
+export const TOPIC_DURATION_REFERENCE_MINUTES_PER_DAY = 45;
+
+export const resolveGoalMinutesPerDay = (
+  minutesPerDay: number | null | undefined
+): number => Math.max(minutesPerDay ?? TOPIC_DURATION_REFERENCE_MINUTES_PER_DAY, 5);
+
+/**
+ * Calendar days for a topic: `durationWeeks` × 7 at reference pace, scaled by actual minutes/day.
+ */
+export const topicCalendarDaySpan = (
+  durationWeeks: number,
+  minutesPerDay: number | null | undefined
+): number => {
+  const m = resolveGoalMinutesPerDay(minutesPerDay);
+  const days =
+    durationWeeks * 7 * (TOPIC_DURATION_REFERENCE_MINUTES_PER_DAY / m);
+  return Math.max(1, Math.ceil(days));
+};
+
+export const computeTopicDueAt = (
+  startAt: Date,
+  durationWeeks: number,
+  minutesPerDay: number | null | undefined
+): Date => {
+  const end = new Date(startAt);
+  end.setDate(end.getDate() + topicCalendarDaySpan(durationWeeks, minutesPerDay));
+  return end;
 };
 
 export const normalizeProgramTopics = (topics: Array<Record<string, unknown>>) => {
@@ -48,6 +72,7 @@ export const normalizeProgramTopics = (topics: Array<Record<string, unknown>>) =
 export const completeTopicIfReady = async (topicId: string, userId: string) => {
   const topic = await prisma.goalTopic.findFirst({
     where: { id: topicId, goal: { userId } },
+    include: { goal: { select: { minutesPerDay: true } } },
   });
 
   if (!topic) return null;
@@ -69,7 +94,11 @@ export const completeTopicIfReady = async (topicId: string, userId: string) => {
 
     if (nextTopic) {
       const startAt = now;
-      const dueAt = addWeeks(startAt, nextTopic.durationWeeks);
+      const dueAt = computeTopicDueAt(
+        startAt,
+        nextTopic.durationWeeks,
+        topic.goal.minutesPerDay
+      );
       await tx.goalTopic.update({
         where: { id: nextTopic.id },
         data: { status: GoalTopicStatus.in_progress, startAt, dueAt },

@@ -2,7 +2,7 @@ import { GoalTopicStatus } from "@prisma/client";
 
 import prisma from "../../db/prisma";
 import { createChatWithPrompt } from "../chatService";
-import { addWeeks, completeTopicIfReady } from "../goalService";
+import { completeTopicIfReady, computeTopicDueAt } from "../goalService";
 import { buildLessonPrompt } from "./helpers";
 
 export type CreateTopicLessonForUserResult =
@@ -64,7 +64,9 @@ export const createTopicLessonForUser = async (params: {
 
   const now = new Date();
   const startAt = topic.startAt ?? now;
-  const dueAt = topic.dueAt ?? addWeeks(startAt, topic.durationWeeks);
+  const dueAt =
+    topic.dueAt ??
+    computeTopicDueAt(startAt, topic.durationWeeks, topic.goal.minutesPerDay);
 
   await prisma.goalTopic.update({
     where: { id: topic.id },
