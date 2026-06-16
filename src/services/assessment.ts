@@ -64,7 +64,9 @@ export const buildAssessmentPrompt = (
 const normalizeOption = (option: string) =>
   option.replace(/^[A-Da-d][\).\-\:]\s+/, "").trim();
 
-export const normalizeAnswer = (value: string) => value.trim().toLowerCase();
+// Collapses internal whitespace so scoring matches UI-selected options reliably.
+export const normalizeAnswer = (value: string) =>
+  value.trim().toLowerCase().replace(/\s+/g, " ");
 
 const hasUnsupportedVisualReference = (prompt: string) =>
   /(?:на|по)\s+(?:график(?:е|у)?|диаграмм(?:е|у)?|рисунк(?:е|у)?|изображени(?:и|ю)?|схем(?:е|у)|таблиц(?:е|у))\b|график\s+показывает\b/i.test(

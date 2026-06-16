@@ -1,17 +1,18 @@
-import { buildSystemMessages, ChatMessage } from "./chatPrompts";
+import { buildSystemMessages, ChatMessage, LessonFocusContext } from "./chatPrompts";
 import { openai, OPENAI_MODEL } from "./client";
 import { postprocessAssistantOutput } from "./postprocess";
 
 export const generateGPT = async (
   context: ChatMessage[],
   tutorInstructions?: string | null,
-  displayName?: string | null
+  displayName?: string | null,
+  lessonFocus?: LessonFocusContext | null
 ): Promise<string> => {
   try {
     const completion = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       messages: [
-        ...buildSystemMessages(tutorInstructions, displayName),
+        ...buildSystemMessages(tutorInstructions, displayName, lessonFocus),
         ...context.map((m) => ({ role: m.role, content: m.outputText })),
       ],
     });

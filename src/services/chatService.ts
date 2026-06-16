@@ -1,19 +1,22 @@
 import prisma from "../db/prisma";
-import { generateGPT } from "../libs/openai";
+import { generateGPT, type LessonFocusContext } from "../libs/openai";
 
 export type ChatContextMessage = {
   role: "user" | "assistant";
   outputText: string;
 };
 
-const DEFAULT_ASSISTANT_FALLBACK =
+export type { LessonFocusContext };
+
+export const DEFAULT_ASSISTANT_FALLBACK =
   "Извините, сейчас не удалось сгенерировать ответ. Попробуйте позже.";
 
 export const generateAssistantTextForUser = async (
   userId: string,
   context: ChatContextMessage[],
   fallbackText = DEFAULT_ASSISTANT_FALLBACK,
-  errorLabel = "Generate GPT failed"
+  errorLabel = "Ошибка генерации ответа GPT",
+  lessonFocus?: LessonFocusContext | null
 ) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -24,7 +27,8 @@ export const generateAssistantTextForUser = async (
     return await generateGPT(
       context,
       user?.tutorInstructions,
-      user?.displayName
+      user?.displayName,
+      lessonFocus ?? null
     );
   } catch (err) {
     console.error(errorLabel, err);
@@ -35,7 +39,8 @@ export const generateAssistantTextForUser = async (
 export const createChatWithPrompt = async (
   userId: string,
   input: string,
-  title?: string
+  title?: string,
+  lessonFocus?: LessonFocusContext | null
 ) => {
   const normalizedInput = input.trim();
   if (!normalizedInput) {
@@ -45,7 +50,9 @@ export const createChatWithPrompt = async (
   const assistantOutputText = await generateAssistantTextForUser(
     userId,
     [{ role: "user", outputText: normalizedInput }],
-    DEFAULT_ASSISTANT_FALLBACK
+    DEFAULT_ASSISTANT_FALLBACK,
+    "Ошибка генерации ответа GPT",
+    lessonFocus ?? null
   );
 
   return prisma.chat.create({

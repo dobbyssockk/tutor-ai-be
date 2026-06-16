@@ -9,16 +9,14 @@ export type ProgramTopicInput = {
   durationWeeks: number;
 };
 
-/** Nominal daily effort that stored `durationWeeks` is calibrated to (see `computeTopicDueAt`). */
+// Nominal daily effort that stored `durationWeeks` is calibrated to (see `computeTopicDueAt`).
 export const TOPIC_DURATION_REFERENCE_MINUTES_PER_DAY = 45;
 
 export const resolveGoalMinutesPerDay = (
   minutesPerDay: number | null | undefined
 ): number => Math.max(minutesPerDay ?? TOPIC_DURATION_REFERENCE_MINUTES_PER_DAY, 5);
 
-/**
- * Calendar days for a topic: `durationWeeks` × 7 at reference pace, scaled by actual minutes/day.
- */
+// Calendar days for a topic: `durationWeeks` × 7 at reference pace, scaled by actual minutes/day.
 export const topicCalendarDaySpan = (
   durationWeeks: number,
   minutesPerDay: number | null | undefined

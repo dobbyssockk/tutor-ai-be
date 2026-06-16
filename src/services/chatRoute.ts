@@ -1,7 +1,7 @@
 import { Chat, Message } from "@prisma/client";
 
 import prisma from "../db/prisma";
-import { generateAssistantTextForUser } from "./chatService";
+import { generateAssistantTextForUser, DEFAULT_ASSISTANT_FALLBACK } from "./chatService";
 
 type ChatWithMessages = Chat & { messages: Message[] };
 
@@ -96,7 +96,30 @@ export const addMessageToChat = async (
     orderBy: { createdAt: "asc" },
   });
 
-  const assistantOutputText = await generateAssistantTextForUser(userId, context);
+  const lessonTopic = await prisma.goalTopic.findFirst({
+    where: { lessonChatId: chatId, goal: { userId } },
+    select: {
+      title: true,
+      summary: true,
+      goal: { select: { title: true } },
+    },
+  });
+
+  const lessonFocus = lessonTopic
+    ? {
+        goalTitle: lessonTopic.goal.title,
+        topicTitle: lessonTopic.title,
+        summary: lessonTopic.summary,
+      }
+    : null;
+
+  const assistantOutputText = await generateAssistantTextForUser(
+    userId,
+    context,
+    DEFAULT_ASSISTANT_FALLBACK,
+    "Ошибка генерации ответа GPT",
+    lessonFocus
+  );
 
   const assistantMsg = await prisma.message.create({
     data: { role: "assistant", outputText: assistantOutputText, chatId },

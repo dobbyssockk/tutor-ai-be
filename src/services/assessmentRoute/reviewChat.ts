@@ -47,7 +47,7 @@ export const createAttemptReviewChatForUser = async (
     userId,
     [{ role: "user", outputText: prompt }],
     fallbackReviewText,
-    "Assessment review generation failed"
+    "Ошибка генерации разбора теста"
   );
 
   const reviewChat = await prisma.chat.create({

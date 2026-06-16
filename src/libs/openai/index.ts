@@ -1,4 +1,5 @@
 export { generateGPT } from "./generateGPT";
+export type { LessonFocusContext } from "./chatPrompts";
 export { generateAssessmentQuestions } from "./generateAssessmentQuestions";
 export type {
   AssessmentGenerationInput,

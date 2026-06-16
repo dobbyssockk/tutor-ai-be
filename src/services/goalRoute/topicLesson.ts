@@ -1,7 +1,7 @@
 import { GoalTopicStatus } from "@prisma/client";
 
 import prisma from "../../db/prisma";
-import { createChatWithPrompt } from "../chatService";
+import { createChatWithPrompt, type LessonFocusContext } from "../chatService";
 import { completeTopicIfReady, computeTopicDueAt } from "../goalService";
 import { buildLessonPrompt } from "./helpers";
 
@@ -60,7 +60,12 @@ export const createTopicLessonForUser = async (params: {
   }
 
   const prompt = buildLessonPrompt(topic);
-  const chat = await createChatWithPrompt(userId, prompt, `Урок: ${topic.title}`);
+  const lessonFocus: LessonFocusContext = {
+    goalTitle: topic.goal.title,
+    topicTitle: topic.title,
+    summary: topic.summary,
+  };
+  const chat = await createChatWithPrompt(userId, prompt, `Урок: ${topic.title}`, lessonFocus);
 
   const now = new Date();
   const startAt = topic.startAt ?? now;

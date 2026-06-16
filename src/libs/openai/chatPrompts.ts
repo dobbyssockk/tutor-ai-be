@@ -27,9 +27,17 @@ export type ChatMessage = {
   outputText: string;
 };
 
+// When the chat is a goal-topic lesson; assessment may use this thread.
+export type LessonFocusContext = {
+  goalTitle: string;
+  topicTitle: string;
+  summary?: string | null;
+};
+
 export const buildSystemMessages = (
   tutorInstructions?: string | null,
-  displayName?: string | null
+  displayName?: string | null,
+  lessonFocus?: LessonFocusContext | null
 ) => {
   const messages: { role: "system"; content: string }[] = [
     { role: "system", content: INSTRUCTIONS },
@@ -48,6 +56,24 @@ export const buildSystemMessages = (
     messages.push({
       role: "system",
       content: `User's name: ${displayName.trim()}. Use this name when appropriate.`,
+    });
+  }
+
+  if (lessonFocus?.goalTitle?.trim() && lessonFocus.topicTitle?.trim()) {
+    const summaryLine = lessonFocus.summary?.trim()
+      ? `Topic summary: ${lessonFocus.summary.trim()}`
+      : null;
+    messages.push({
+      role: "system",
+      content: [
+        `This chat is the lesson for goal "${lessonFocus.goalTitle.trim()}" on topic "${lessonFocus.topicTitle.trim()}".`,
+        summaryLine,
+        "A topic assessment may be generated from this chat.",
+        "If the learner's latest message is clearly off-topic (different subject or unrelated tangent), still answer helpfully and concisely, then add a brief friendly reminder (1-2 sentences in the learner's language) of the current lesson topic and that staying on-topic best prepares them for the test.",
+        "If the message is on-topic or only loosely related but still useful for learning this topic, do not add that reminder.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     });
   }
 
